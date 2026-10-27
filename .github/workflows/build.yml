@@ -1,0 +1,71 @@
+name: Build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        target_type: [server, client]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the mod version comes from the latest tag
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/AppData/Local/.xmake
+          key: xmake-${{ matrix.target_type }}-${{ hashFiles('xmake.lua', 'xmake-requires.lock') }}
+          restore-keys: |
+            xmake-${{ matrix.target_type }}-
+
+      # The action's release lookup fails intermittently on the runners ("GitHub release for
+      # LLVM 22 was not found"); retry once before failing the job.
+      - name: Setup LLVM
+        id: llvm
+        continue-on-error: true
+        uses: ZhongRuoyu/setup-llvm@v0
+        with:
+          llvm-version: 22
+
+      - name: Setup LLVM (retry)
+        if: steps.llvm.outcome == 'failure'
+        uses: ZhongRuoyu/setup-llvm@v0
+        with:
+          llvm-version: 22
+
+      - run: git config --global core.longpaths true
+
+      - run: xmake repo -u
+
+      - name: Build
+        shell: pwsh
+        run: pwsh tools/build.ps1 -Target ${{ matrix.target_type }}
+
+      - name: Dump xmake package install logs
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-ChildItem "$env:LOCALAPPDATA/.xmake/cache/packages" -Recurse -Filter install.txt -ErrorAction SilentlyContinue |
+            ForEach-Object { Write-Host "::group::$($_.FullName)"; Get-Content $_.FullName -Tail 400; Write-Host '::endgroup::' }
+
+      - name: Unit tests
+        if: matrix.target_type == 'server'
+        run: |
+          xmake build -y lo-tests
+          xmake run lo-tests
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ github.event.repository.name }}-${{ github.sha }}-${{ matrix.target_type }}-windows-x64
+          path: |
+            bin/${{ matrix.target_type }}/LiftOff/

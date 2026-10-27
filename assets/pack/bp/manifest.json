@@ -1,0 +1,21 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "LiftOff BP",
+    "description": "Blocks, items and recipes of LiftOff (Carry On for Bedrock)",
+    "uuid": "961df7ed-d122-4dfb-8756-0fa2dabe3d6c",
+    "version": "${version}",
+    "min_engine_version": [
+      1,
+      21,
+      40
+    ]
+  },
+  "modules": [
+    {
+      "type": "data",
+      "uuid": "1014f6f8-e6d4-49ca-a4ce-39ad0358fd8f",
+      "version": "${version}"
+    }
+  ]
+}

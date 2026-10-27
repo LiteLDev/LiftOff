@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        target_type: [server, client]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the mod version comes from the latest tag
+
+      - uses: xmake-io/github-action-setup-xmake@v1
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/AppData/Local/.xmake
+          key: xmake-${{ matrix.target_type }}-${{ hashFiles('xmake.lua', 'xmake-requires.lock') }}
+          restore-keys: |
+            xmake-${{ matrix.target_type }}-
+
+      # See build.yml: the action's release lookup fails intermittently.
+      - name: Setup LLVM
+        id: llvm
+        continue-on-error: true
+        uses: ZhongRuoyu/setup-llvm@v0
+        with:
+          llvm-version: 22
+
+      - name: Setup LLVM (retry)
+        if: steps.llvm.outcome == 'failure'
+        uses: ZhongRuoyu/setup-llvm@v0
+        with:
+          llvm-version: 22
+
+      - run: git config --global core.longpaths true
+
+      - run: xmake repo -u
+
+      - name: Build
+        shell: pwsh
+        run: pwsh tools/build.ps1 -Target ${{ matrix.target_type }}
+
+      - name: Unit tests
+        if: matrix.target_type == 'server'
+        run: |
+          xmake build -y lo-tests
+          xmake run lo-tests
+
+      - name: Check version
+        shell: pwsh
+        run: |
+          $expected = "${{ github.ref_name }}".TrimStart('v')
+          $actual = (Get-Content bin/${{ matrix.target_type }}/LiftOff/manifest.json | ConvertFrom-Json).version
+          if ($actual -ne $expected) { throw "manifest version $actual does not match tag $expected" }
+          $tooth = (Get-Content tooth.json | ConvertFrom-Json).version
+          if ($tooth -ne $expected) { throw "tooth.json version $tooth does not match tag $expected" }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $dir = "bin/${{ matrix.target_type }}/LiftOff"
+          Copy-Item COPYING, COPYING.LESSER, README.md -Destination $dir
+          Compress-Archive -Path $dir -DestinationPath liftoff-${{ matrix.target_type }}-windows-x64.zip
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: liftoff-${{ matrix.target_type }}-windows-x64
+          path: liftoff-${{ matrix.target_type }}-windows-x64.zip
+
+  release:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release notes
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $lines = Get-Content CHANGELOG.md
+          $start = ($lines | Select-String -Pattern "^## \[$([regex]::Escape($version))\]").LineNumber
+          if (-not $start) { throw "CHANGELOG.md has no section for $version" }
+          $rest = $lines[$start..($lines.Count - 1)]
+          $end = ($rest | Select-String -Pattern '^## \[|^\[[^\]]+\]: ' | Select-Object -First 1).LineNumber
+          $body = if ($end) { $rest[0..($end - 2)] } else { $rest }
+          ($body -join "`n").Trim() | Set-Content RELEASE_NOTES.md -Encoding utf8
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*.zip
+          body_path: RELEASE_NOTES.md

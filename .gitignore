@@ -1,0 +1,33 @@
+# Build outputs
+bin/
+build/
+build-*/
+build_*/
+.xmake/
+vsxmake*/
+compile_commands.json
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.dll
+*.exe
+
+# Editors
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# e2e outputs and local game installs
+tools/e2e/**/out/
+tools/e2e/**/.cache/
+tools/e2e/**/bds/
+tools/e2e/**/*.log
+
+# Agent-local files
+.claude/worktrees/
+.claude/settings.local.json
+tools/textures/preview/

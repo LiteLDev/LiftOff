@@ -1,0 +1,21 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "LiftOff RP",
+    "description": "Textures, models and names of LiftOff (Carry On for Bedrock)",
+    "uuid": "0e33f390-6bed-4ef0-b0ed-fd4b1fb5de77",
+    "version": "${version}",
+    "min_engine_version": [
+      1,
+      21,
+      40
+    ]
+  },
+  "modules": [
+    {
+      "type": "resources",
+      "uuid": "62de65e7-5b7c-4af5-be5d-f0d1f0ded485",
+      "version": "${version}"
+    }
+  ]
+}

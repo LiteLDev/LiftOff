@@ -1,0 +1,46 @@
+{
+  "format_version": 3,
+  "format_uuid": "289f771f-2c9a-4d73-9f3f-8492495a924d",
+  "tooth": "github.com/LiteLDev/LiftOff",
+  "version": "0.1.0",
+  "info": {
+    "name": "LiftOff",
+    "description": "Carry On for Minecraft Bedrock Edition: pick up chests, blocks and mobs and carry them in your arms",
+    "tags": ["platform:levilamina", "type:mod", "server", "client", "category:game-mechanics", "category:utility", "carry", "pickup"]
+  },
+  "variants": [
+    {
+      "platform": "win-x64",
+      "dependencies": {
+        "github.com/LiteLDev/LeviLamina": "26.51.*"
+      },
+      "assets": [
+        {
+          "type": "zip",
+          "urls": ["https://{{tooth}}/releases/download/v{{version}}/liftoff-server-windows-x64.zip"],
+          "placements": [
+            { "type": "dir", "src": "LiftOff/", "dest": "plugins/LiftOff/" }
+          ]
+        }
+      ],
+      "preserve_files": ["plugins/LiftOff/config/*"]
+    },
+    {
+      "label": "client",
+      "platform": "win-x64",
+      "dependencies": {
+        "github.com/LiteLDev/LeviLamina#client": "26.51.*"
+      },
+      "assets": [
+        {
+          "type": "zip",
+          "urls": ["https://{{tooth}}/releases/download/v{{version}}/liftoff-client-windows-x64.zip"],
+          "placements": [
+            { "type": "dir", "src": "LiftOff/", "dest": "mods/LiftOff/" }
+          ]
+        }
+      ],
+      "preserve_files": ["mods/LiftOff/config/*"]
+    }
+  ]
+}
