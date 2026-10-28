@@ -47,6 +47,7 @@
 #include "feature/carry/CarryData.h"
 #include "feature/carry/Hooks.h"
 #include "feature/carry/Slowness.h"
+#include "game/Blocks.h"
 #include "game/Items.h"
 #include "mod/Log.h"
 
@@ -61,9 +62,8 @@ constexpr float kSneakDrop    = 0.3f;  ///< lower while sneaking
 constexpr float kForward      = 0.55f; ///< centre of a carried block in front of the body
 constexpr float kSwimForward  = 1.3f;  ///< swimming / gliding: in front of the head
 constexpr float kSwimY        = 0.3f;
-constexpr float kHeadCentre   = 1.75f; ///< armor stand: centre of a block worn on the head above its feet
-constexpr float kArmorScale   = 1.0f;  ///< a worn block is ~0.6 wide, Carry On draws blocks at 0.6
-constexpr char  kArmorStand[] = "minecraft:armor_stand";
+constexpr float kBlockScale     = 0.6f; ///< Carry On draws carried blocks at 0.6 in third person
+constexpr char  kFallingBlock[] = "minecraft:falling_block";
 
 using DataList = std::vector<std::unique_ptr<DataItem>>;
 
@@ -86,8 +86,7 @@ void setItem(DataList& list, ActorDataIDs id, T value) {
 
 std::int64_t flagBit(ActorFlags f) { return std::int64_t{1} << static_cast<int>(f); }
 
-/// Flags of a display actor: never falls, no name tag; `invisible` hides an armor stand's body (what it
-/// wears stays visible).
+/// Flags of a display actor: never falls, no name tag; `invisible` hides it.
 void fixFlags(DataList& list, bool invisible) {
     std::int64_t flags = 0;
     if (auto* d = findItem(list, ActorDataIDs::Reserved0)) {
@@ -144,17 +143,17 @@ EntityBox boxOf(Actor& actor) {
     return b;
 }
 
-std::shared_ptr<Packet> itemAddPacket(std::uint64_t id) {
-    auto pkt                          = make<AddActorPacket>(MinecraftPacketIds::AddActor);
-    pkt->mEntityId->rawID             = static_cast<std::int64_t>(id);
-    pkt->mRuntimeId->rawID            = id;
-    pkt->mActorType                   = kArmorStand;
-    auto& list                        = *pkt->mData->mData;
-    fixFlags(list, true);
-    setItem(list, ActorDataIDs::Reserved038, kArmorScale);
+std::shared_ptr<Packet> blockAddPacket(std::uint64_t id, Block const& block) {
+    auto pkt               = make<AddActorPacket>(MinecraftPacketIds::AddActor);
+    pkt->mEntityId->rawID  = static_cast<std::int64_t>(id);
+    pkt->mRuntimeId->rawID = id;
+    pkt->mActorType        = kFallingBlock;
+    auto& list             = *pkt->mData->mData;
+    fixFlags(list, false); // no gravity: it never falls on the client
+    setItem(list, ActorDataIDs::Variant, static_cast<int>(block.mNetworkId));
+    setItem(list, ActorDataIDs::Reserved038, kBlockScale);
     return pkt;
 }
-
 std::shared_ptr<Packet> entityAddPacket(std::string_view snbt, std::uint64_t id, StandIn& out) {
     std::shared_ptr<AddActorPacket> pkt;
     bool ok = withTempActor(snbt, nullptr, [&](Actor& actor) {
@@ -184,16 +183,6 @@ std::shared_ptr<Packet> entityAddPacket(std::string_view snbt, std::uint64_t id,
         out.width  = box.width * s;
     });
     return ok ? pkt : nullptr;
-}
-
-std::shared_ptr<Packet> equipPacket(std::uint64_t id, ItemStack const& item) {
-    auto pkt               = make<MobArmorEquipmentPacket>(MinecraftPacketIds::MobArmorEquipment);
-    pkt->mRuntimeId->rawID = id;
-    // The descriptor has no callable assignment: rebuild it in place (virtual destructor).
-    NetworkItemStackDescriptor* head = &*pkt->mHead;
-    std::destroy_at(head);
-    new (head) NetworkItemStackDescriptor(item);
-    return pkt;
 }
 
 schar angleByte(float degrees) {
@@ -277,22 +266,26 @@ StandIn buildStandIn(carry::CarryData const& data, carry::CarryVisual const& vis
     switch (visual.kind) {
     case Kind::Block:
     case Kind::Item: {
-        ItemStack item;
+        // Carry On draws the item of the block's default state; a vanilla client gets that block as a
+        // display block (a falling block that never falls). An item visual shows its block, if any.
+        Block const* block = nullptr;
         if (visual.kind == Kind::Block) {
             carry::CarryData tmp;
             tmp.type  = carry::CarryType::Block;
             tmp.block = visual.block;
-            if (auto const* block = carry::carriedBlock(tmp)) item.reinit(*block, 1);
+            block     = carry::carriedBlock(tmp);
         } else {
-            item = game::makeItem(visual.item);
+            block = game::blockWith(visual.item);
         }
-        if (item.isNull()) return s;
+        if (!block) return s;
+        if (auto const* def = game::blockWith(block->getTypeName())) block = def; // default state
         s.kind      = StandIn::Kind::Item;
-        s.actorType = kArmorStand;
-        s.item      = item.getTypeName();
-        s.scale     = kArmorScale;
-        s.add       = itemAddPacket(id);
-        s.equip     = equipPacket(id, item);
+        s.actorType = kFallingBlock;
+        s.item      = block->getTypeName();
+        s.scale     = kBlockScale;
+        s.height    = kBlockScale;
+        s.width     = kBlockScale;
+        s.add       = blockAddPacket(id, *block);
         break;
     }
     case Kind::Entity: {
@@ -321,7 +314,7 @@ Placement placementFor(StandIn const& standIn, Player const& carrier) {
     float ahead   = lying ? kSwimForward : kForward;
     float bottom  = 0.0f; // stand-in feet relative to the centre
     if (standIn.kind == StandIn::Kind::Item) {
-        bottom = -kHeadCentre * standIn.scale;
+        bottom = -standIn.height * 0.5f; // a falling block stands on its bottom centre
     } else {
         bottom = -standIn.height * 0.5f;
         if (!lying) ahead = std::max(kForward, 0.25f + standIn.width * 0.5f);

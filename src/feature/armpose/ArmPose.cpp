@@ -166,7 +166,7 @@ void sendRemove(Player const& viewer, std::uint64_t id) {
 
 void sendStandIn(Player const& viewer, StandIn const& s, Placement const& at) {
     moveAddPacket(s, at);
-    send(viewer, s.add, {"add", s.actorType, {{"id", s.id}, {"scale", s.scale}}});
+    send(viewer, s.add, {"add", s.actorType, {{"id", s.id}, {"scale", s.scale}, {"block", s.item}}});
     if (s.equip) send(viewer, s.equip, {"equip", s.item, {{"id", s.id}}});
 }
 

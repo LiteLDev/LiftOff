@@ -40,13 +40,13 @@ struct StandIn {
     enum class Kind { None, Item, Entity };
     Kind          kind = Kind::None;
     std::uint64_t id   = 0;  ///< runtime id = unique id, never used by a server actor
-    std::string   actorType; ///< "minecraft:armor_stand" for items
-    std::string   item;      ///< Kind::Item: the item worn on the head
+    std::string   actorType; ///< "minecraft:falling_block" for blocks
+    std::string   item;      ///< Kind::Item: the block shown
     float         scale  = 1.0f;
     float         height = 0.0f; ///< drawn height (blocks) of an entity stand-in
     float         width  = 0.0f;
     std::shared_ptr<Packet> add;   ///< AddActorPacket
-    std::shared_ptr<Packet> equip; ///< MobArmorEquipmentPacket (Kind::Item)
+    std::shared_ptr<Packet> equip; ///< optional equipment packet (unused by the built-in stand-ins)
 
     [[nodiscard]] bool valid() const { return kind != Kind::None && add != nullptr; }
 };

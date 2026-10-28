@@ -18,7 +18,12 @@
 #include "mc/deps/core/file/PathView.h"
 #include "mc/deps/core/resource/ResourceLocation.h"
 #include "mc/deps/core/string/HashedString.h"
+#include "mc/resources/MinEngineVersion.h"
+#include "mc/resources/PackStats.h"
 #include "mc/resources/ResourcePackManager.h"
+#include "mc/world/actor/animation/ActorAnimationGroup.h"
+#include "mc/deps/core/file/Path.h"
+#include "mc/server/commands/CurrentCmdVersion.h"
 #include "client/Client.h"
 #include "mc/legacy/ActorRuntimeID.h"
 #include "mc/legacy/ActorUniqueID.h"
@@ -93,7 +98,41 @@ void play(Actor& actor) {
     );
 }
 
+/// Makes sure the level's animation group has the arm animations. LeviLamina puts the mod's resource
+/// pack on the client's stack, but its animation files did not reach the actor animation group in
+/// practice (the files load through the ResourcePackManager, yet no animation of them is known);
+/// so the client loads the file into the group itself, once per level.
+void ensureAnimations(Level& level) {
+    static void const* done = nullptr;
+    if (done == &level) return;
+    done       = &level;
+    auto* group = level.mActorAnimationGroup.get();
+    if (!group) return;
+    bool before = group->getActorAnimationInfo(HashedString(ap::kNativeAnimation)) != nullptr;
+    bool vanilla = group->getActorAnimationInfo(HashedString("animation.player.move.arms.zombie")) != nullptr;
+    bool after   = before;
+    if (!before) {
+        std::string text;
+        auto*       ci = client::currentClient();
+        if (ci && ci->getResourcePackManager().load(ResourceLocation(Core::PathView("animations/liftoff_carry.animation.json")), text)) {
+            PackStats stats{};
+            group->loadActorAnimation(
+                text,
+                Core::Path("animations/liftoff_carry.animation.json"),
+                stats,
+                MinEngineVersion::fromString("1.21.40"),
+                CurrentCmdVersion::Latest,
+                false,
+                ""
+            );
+            after = group->getActorAnimationInfo(HashedString(ap::kNativeAnimation)) != nullptr;
+        }
+    }
+    log().info("armpose: arm animations in the client animation group: before {}, after {} (vanilla {})", before, after, vanilla);
+}
+
 void tick(Level& level) {
+    ensureAnimations(level);
     auto const& cfg   = config::get<feature::carry::CarryClientConfig>().settings;
     auto&       known = tracked();
     std::unordered_map<std::int64_t, bool> seen;
@@ -135,28 +174,6 @@ void tick(Level& level) {
                 t.pose.right.rotation[2],
                 p.evalMolang(ap::nativeVariable(ap::Side::Right, "x"))
             );
-            static bool checked = false;
-            if (!checked) {
-                checked = true;
-                std::string text;
-                bool        found = false;
-                if (auto* ci = client::currentClient()) {
-                    found = ci->getResourcePackManager().load(
-                        ResourceLocation(Core::PathView("animations/liftoff_carry.animation.json")),
-                        text
-                    );
-                }
-                log().info("armpose: client resource stack has the arm animations: {} ({} bytes)", found, text.size());
-                auto& anim = p.getAnimationComponent();
-                log().info(
-                    "armpose: animation registered: native {}, right.x.0 {}, vanilla zombie arms {}; v.={:.2f} variable.={:.2f}",
-                    anim.isAnimationRegistered(HashedString(ap::kNativeAnimation)),
-                    anim.isAnimationRegistered(HashedString(ap::animationName(ap::Side::Right, ap::Axis::X, 0))),
-                    anim.isAnimationRegistered(HashedString("animation.player.move.arms.zombie")),
-                    p.evalMolang("v.liftoff_carry_rx"),
-                    p.evalMolang("variable.liftoff_carry_rx")
-                );
-            }
         }
         return true;
     });

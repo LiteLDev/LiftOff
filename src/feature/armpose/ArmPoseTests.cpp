@@ -161,9 +161,9 @@ LO_REGISTER_SELFTEST("armpose.vanilla_viewer", [](Context& ctx) -> ll::coro::Cor
     ctx.check(sameAnimations(sent, want), "the viewer gets the seven arm animations");
     auto adds = ofKind(sent, "add");
     ctx.require(adds.size() == 1, "the viewer gets one stand-in");
-    ctx.check(adds[0].name == "minecraft:armor_stand", "a block stand-in is an armor stand");
-    auto equips = ofKind(sent, "equip");
-    ctx.check(equips.size() == 1 && equips[0].name == "minecraft:chest", "it wears the chest item");
+    ctx.check(adds[0].name == "minecraft:falling_block", "a block stand-in is a display block");
+    ctx.check(adds[0].detail.value("block", "") == "minecraft:chest", "it shows the chest");
+    ctx.check(near(adds[0].detail.value("scale", 0.0f), 0.6f), "at Carry On's 0.6 block scale");
     std::uint64_t id = adds[0].detail.value("id", std::uint64_t{0});
     ctx.check(id != 0 && armpose::standInShownTo(*carrier, *viewer) == id, "the stand-in id is tracked");
     ctx.check(carry::isCarrying(*carrier) && carrier->getSelectedItem().isNull(), "the carrier's hand stays empty");

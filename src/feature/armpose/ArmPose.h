@@ -8,7 +8,9 @@
 //   vanilla clients with `AnimateEntityPacket` (like /playanimation), modded clients play the native
 //   variant themselves with exact values (src/client/armpose/).
 // - Stand-in: vanilla viewers of a carrier get a client-only display actor that never exists on the
-//   server: a carried block (or item visual) is an invisible armor stand wearing the block's item, a
+//   server: a carried block (or item visual) is a display block (a falling block that never falls,
+//   the block's default state at Carry On's 0.6 scale; an invisible armor stand's worn item does not
+//   render on vanilla clients), a
 //   carried entity is an actor of its type built from its NBT, scaled like Carry On's third-person
 //   view. It follows the carrier with `MoveActorAbsolutePacket`. A carried player rides the carrier
 //   for real (U5) and needs no stand-in. The carrier's own client gets no stand-in (in first person it
