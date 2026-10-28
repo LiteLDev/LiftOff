@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 
@@ -101,7 +102,7 @@ std::optional<float> parseFloat(std::string_view s) {
     if (s.empty()) return std::nullopt;
     float v   = 0.f;
     auto [p, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
-    if (ec != std::errc{} || p != s.data() + s.size()) return std::nullopt;
+    if (ec != std::errc{} || p != s.data() + s.size() || !std::isfinite(v)) return std::nullopt;
     return v;
 }
 
@@ -331,28 +332,14 @@ std::array<float, 3> parseVector(std::string_view text, float fallback) {
 
 bool ScriptRender::empty() const {
     auto unset = [](Axes const& a) { return !a[0] && !a[1] && !a[2]; };
-    return !nameBlock && !nameEntity && !nbt && translation == std::array{0.f, 0.f, 0.f}
-        && rotation == std::array{0.f, 0.f, 0.f} && scale == std::array{1.f, 1.f, 1.f} && unset(leftArm)
-        && unset(rightArm) && renderLeftArm && renderRightArm;
+    return !nameBlock && !nameEntity && !nbt && !translation && !rotation && !scale && unset(leftArm)
+        && unset(rightArm) && !renderLeftArm && !renderRightArm;
 }
 
 ScriptRender parseScriptRender(nlohmann::json const& render) {
     ScriptRender r;
     if (!render.is_object()) return r;
-    if (auto s = nonEmptyString(render, "name_block")) {
-        if (auto spec = parseBlockSpec(*s)) {
-            std::string text = spec->id;
-            if (!spec->states.empty()) {
-                text += '[';
-                for (std::size_t i = 0; i < spec->states.size(); ++i) {
-                    if (i) text += ',';
-                    text += spec->states[i].name + "=" + *spec->states[i].value;
-                }
-                text += ']';
-            }
-            r.nameBlock = std::move(text);
-        }
-    }
+    if (auto s = nonEmptyString(render, "name_block")) r.nameBlock = parseBlockSpec(*s);
     if (auto s = nonEmptyString(render, "name_entity"); s && plainId(*s)) r.nameEntity = withNamespace(*s);
     if (auto it = render.find("nbt"); it != render.end()) {
         if (it->is_object()) {
@@ -367,8 +354,8 @@ ScriptRender parseScriptRender(nlohmann::json const& render) {
     if (auto s = nonEmptyString(render, "scale")) r.scale = parseVector(*s, 1.f);
     if (auto s = nonEmptyString(render, "rotation_left_arm")) r.leftArm = parseAxes(*s);
     if (auto s = nonEmptyString(render, "rotation_right_arm")) r.rightArm = parseAxes(*s);
-    if (auto b = boolValue(render, "render_left_arm")) r.renderLeftArm = *b;
-    if (auto b = boolValue(render, "render_right_arm")) r.renderRightArm = *b;
+    r.renderLeftArm  = boolValue(render, "render_left_arm");
+    r.renderRightArm = boolValue(render, "render_right_arm");
     return r;
 }
 

@@ -26,6 +26,16 @@ namespace lo::core::modeloverride {
 
 enum class TargetKind { Item, Block };
 
+/// `id[state=value,...]` (a block state spec as in a block target or script `name_block`). nullopt when
+/// the id is empty / contains '*' or '#', brackets are unbalanced or a state has no value.
+struct BlockSpec {
+    std::string                     id; ///< namespaced
+    std::vector<carry::StateFilter> states;
+
+    friend bool operator==(BlockSpec const&, BlockSpec const&) = default;
+};
+[[nodiscard]] std::optional<BlockSpec> parseBlockSpec(std::string_view text);
+
 /// One `modelOverrides` entry: `<block>[state=value,...]{snbt}->(item|block)<target>[state=value,...]`.
 struct ModelOverride {
     std::string     text;   ///< the entry as written (trimmed)
@@ -52,37 +62,29 @@ struct ModelOverride {
 [[nodiscard]] std::vector<ModelOverride>
 parseAll(std::vector<std::string> const& entries, std::vector<std::string>* invalid = nullptr);
 
-/// `id[state=value,...]` (a block state spec as in a block target or script `name_block`). nullopt when
-/// the id is empty / contains '*' or '#', brackets are unbalanced or a state has no value.
-struct BlockSpec {
-    std::string                     id; ///< namespaced
-    std::vector<carry::StateFilter> states;
-};
-[[nodiscard]] std::optional<BlockSpec> parseBlockSpec(std::string_view text);
 
 // ---- script render --------------------------------------------------------------------------
 
 using Axes = std::array<std::optional<float>, 3>;
 
-/// "x=1,y=0.5,z=-2" -> {1, 0.5, -2}. Missing or malformed axes are nullopt; keys are x / y / z
+/// "x=1,y=0.5,z=-2" -> {1, 0.5, -2}. Missing, malformed or non-finite axes are nullopt; keys are x / y / z
 /// (case-insensitive), whitespace is ignored, the last value of a repeated key wins.
 [[nodiscard]] Axes parseAxes(std::string_view text);
 /// `parseAxes` with the missing axes set to `fallback`.
 [[nodiscard]] std::array<float, 3> parseVector(std::string_view text, float fallback);
 
-/// The `render` object of a script (SPEC §3.12).
+/// The `render` object of a script (SPEC §3.12). Every member is nullopt when the key is absent (or
+/// unusable), so a script only changes what it names.
 struct ScriptRender {
-    std::optional<std::string> nameBlock;  ///< `name_block`: block spec text (namespaced id + states)
+    std::optional<BlockSpec>   nameBlock;  ///< `name_block`: block id (namespaced) + states
     std::optional<std::string> nameEntity; ///< `name_entity`: entity type id (namespaced)
     std::optional<std::string> nbt;        ///< `nbt` as SNBT compound text
-    std::array<float, 3>       translation{0.f, 0.f, 0.f};
-    std::array<float, 3>       rotation{0.f, 0.f, 0.f}; ///< degrees
-    std::array<float, 3>       scale{1.f, 1.f, 1.f};
-    Axes                       leftArm, rightArm; ///< radians, nullopt = computed
-    bool                       renderLeftArm  = true;
-    bool                       renderRightArm = true;
+    /// `translation` / `rotation` (degrees) / `scale`, missing axes 0 / 0 / 1.
+    std::optional<std::array<float, 3>> translation, rotation, scale;
+    Axes                                leftArm, rightArm; ///< radians, nullopt = computed
+    std::optional<bool>                 renderLeftArm, renderRightArm;
 
-    /// True when the render object changes anything at all.
+    /// True when the render object changes nothing.
     [[nodiscard]] bool empty() const;
 };
 

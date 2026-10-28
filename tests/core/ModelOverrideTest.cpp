@@ -140,6 +140,8 @@ TEST(ScriptRender, Axes) {
     EXPECT_FALSE(c[0] || c[1] || c[2]);
     EXPECT_EQ(parseVector("y=2", 1.f), (std::array{1.f, 2.f, 1.f}));
     EXPECT_EQ(parseVector("x=0.25", 0.f), (std::array{0.25f, 0.f, 0.f}));
+    auto nf = parseAxes("x=nan,y=inf,z=-infinity");
+    EXPECT_FALSE(nf[0] || nf[1] || nf[2]);
 }
 
 TEST(ScriptRender, FullObject) {
@@ -156,7 +158,7 @@ TEST(ScriptRender, FullObject) {
         "render_right_arm": true
     })");
     auto r = parseScriptRender(j);
-    EXPECT_EQ(r.nameBlock, "minecraft:stone[stone_type=granite]");
+    EXPECT_EQ(r.nameBlock, (BlockSpec{"minecraft:stone", {{"stone_type", "granite"}}}));
     EXPECT_EQ(r.nameEntity, "minecraft:pig");
     EXPECT_EQ(r.nbt, R"({IsBaby:1b,Name:"x",Variant:2})");
     EXPECT_EQ(r.translation, (std::array{0.f, 0.5f, 0.f}));
@@ -167,8 +169,8 @@ TEST(ScriptRender, FullObject) {
     EXPECT_FALSE(r.leftArm[2]);
     EXPECT_EQ(r.rightArm[0], 1.3f);
     EXPECT_EQ(r.rightArm[2], 0.1f);
-    EXPECT_FALSE(r.renderLeftArm);
-    EXPECT_TRUE(r.renderRightArm);
+    EXPECT_EQ(r.renderLeftArm, false);
+    EXPECT_EQ(r.renderRightArm, true);
     EXPECT_FALSE(r.empty());
 }
 
@@ -182,10 +184,15 @@ TEST(ScriptRender, DefaultsAndBadInput) {
     EXPECT_FALSE(r.nameBlock);
     EXPECT_FALSE(r.nameEntity);
     EXPECT_FALSE(r.nbt);
-    EXPECT_EQ(r.scale, (std::array{1.f, 1.f, 1.f}));
-    EXPECT_TRUE(r.renderLeftArm);
+    EXPECT_FALSE(r.scale);
+    EXPECT_FALSE(r.rotation);
+    EXPECT_FALSE(r.renderLeftArm);
+    EXPECT_FALSE(r.renderRightArm);
     EXPECT_EQ(r.translation, (std::array{1.f, 0.f, 0.f}));
     EXPECT_FALSE(r.empty());
+    auto bad = parseScriptRender(nlohmann::json::parse(R"({"name_block": "minecraft:*"})"));
+    EXPECT_FALSE(bad.nameBlock);
+    EXPECT_TRUE(bad.empty());
 }
 
 TEST(ScriptRender, NbtAsSnbtString) {

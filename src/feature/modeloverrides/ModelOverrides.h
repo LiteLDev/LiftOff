@@ -10,8 +10,9 @@
 //   2. entity carry: script `name_entity` (a fresh entity of that type) and `nbt` (merged into the
 //      rendered entity's NBT);
 //   3. script transform (translation / rotation / scale) and arm values.
-// Model overrides are client settings: they apply only in the client build (on BDS there is no client
-// config, as on a Java dedicated server). Script render applies on both (U13's vanilla stand-ins).
+// Model overrides are client settings: the provider applies them only on the client thread of the client
+// build (on BDS there is no client config, as on a Java dedicated server). Script render applies on every
+// thread (U13's vanilla stand-ins too).
 //
 // Thread-safe: the provider runs on the client thread (renderers) and the server thread (stand-ins,
 // `/carryon debug`); the compiled list is swapped atomically on `/carryon reload`.
@@ -54,8 +55,8 @@ compile(std::vector<std::string> const& entries, std::vector<std::string>* inval
 /// The block `id` with `states` set (values as text, typed by the block's own states). nullptr when
 /// the block or one of the states is unknown or a value does not fit.
 [[nodiscard]] Block const* resolveBlock(std::string_view id, std::vector<core::carry::StateFilter> const& states);
-/// `resolveBlock` from spec text (`id[state=value]`), as block state SNBT ("" when unresolvable).
-[[nodiscard]] std::string resolveBlockSnbt(std::string_view spec);
+/// `resolveBlock` as block state SNBT ("" when unresolvable; cached).
+[[nodiscard]] std::string resolveBlockSnbt(core::modeloverride::BlockSpec const& spec);
 
 /// What a matching override draws.
 struct OverrideResult {
@@ -71,8 +72,16 @@ struct OverrideResult {
 [[nodiscard]] std::optional<OverrideResult>
 findOverride(std::vector<CompiledOverride> const& list, Block const& block, CompoundTag const* blockEntity);
 
-/// True in the client build: model overrides are client settings (a dedicated server has none).
+/// True in the client build: model overrides are client settings (a dedicated server has none). The
+/// `/carryon debug` line uses it (the integrated server shares the client config, as in Java).
 [[nodiscard]] bool modelOverridesActive();
+/// True on the client (render) thread of the client build. The visual provider applies model overrides
+/// only there: like Carry On, they change the local player's own rendering and never what the server
+/// sends (U13's stand-ins for vanilla clients, built on the server thread, look the same on BDS and in a
+/// local world).
+[[nodiscard]] bool onClientThread();
+/// Drops every cached result (reload, world change).
+void invalidateCaches();
 /// `findOverride` with the configured list, from block state SNBT + block actor SNBT (cached). Does not
 /// check `modelOverridesActive()`.
 [[nodiscard]] std::optional<OverrideResult> configuredOverride(std::string const& blockSnbt, std::string const& blockEntitySnbt);

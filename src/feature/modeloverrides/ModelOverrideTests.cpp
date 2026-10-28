@@ -1,6 +1,8 @@
 // Selftests of U12 (model overrides + script render, dx 1200..1299; none of them touches the world).
 
 #include <algorithm>
+#include <atomic>
+#include <memory>
 
 #include "mc/deps/core/string/HashedString.h"
 #include "mc/deps/nbt/StringTag.h"
@@ -15,6 +17,10 @@
 #include "game/Blocks.h"
 #include "mod/Config.h"
 #include "selftest/SelfTest.h"
+
+#ifdef LO_CLIENT
+#include "ll/api/thread/ClientThreadExecutor.h"
+#endif
 
 namespace {
 using lo::selftest::Context;
@@ -68,12 +74,33 @@ CarryVisual baseVisual(CarryData const& d) {
     return v;
 }
 
+/// Sets the configured model overrides for one test; restores the user's list (and recompiles) on exit,
+/// also when the test aborts.
+class OverridesGuard {
+public:
+    explicit OverridesGuard(std::vector<std::string> entries)
+    : mSaved(lo::config::get<carry::CarryClientConfig>().modelOverrides.modelOverrides) {
+        set(std::move(entries));
+    }
+    ~OverridesGuard() { set(std::move(mSaved)); }
+    OverridesGuard(OverridesGuard const&)            = delete;
+    OverridesGuard& operator=(OverridesGuard const&) = delete;
+
+    static void set(std::vector<std::string> entries) {
+        lo::config::mut<carry::CarryClientConfig>().modelOverrides.modelOverrides = std::move(entries);
+        m::rebuild();
+    }
+
+private:
+    std::vector<std::string> mSaved;
+};
+
 constexpr char const* kChestBe =
     R"({id:"Chest",Findable:0b,Items:[{Count:1b,Name:"minecraft:apple",Slot:0b,WasPickedUp:0b},{Count:5b,Name:"minecraft:dirt",Slot:3b,WasPickedUp:0b}],x:0,y:0,z:0})";
 } // namespace
 
 LO_REGISTER_SELFTEST("modeloverrides.defaults", [](Context& ctx) {
-    auto const& cfg = lo::config::get<carry::CarryClientConfig>().modelOverrides.modelOverrides;
+    auto const cfg = carry::CarryClientConfig{}.modelOverrides.modelOverrides;
     std::vector<std::string> invalid;
     auto                     list = m::compile(cfg, &invalid);
     ctx.check(invalid.empty(), "the default entries are valid");
@@ -224,10 +251,7 @@ LO_REGISTER_SELFTEST("modeloverrides.script_render", [](Context& ctx) {
 });
 
 LO_REGISTER_SELFTEST("modeloverrides.precedence", [](Context& ctx) {
-    auto& cfg   = lo::config::mut<carry::CarryClientConfig>();
-    auto  saved = cfg.modelOverrides.modelOverrides;
-    cfg.modelOverrides.modelOverrides = {"minecraft:redstone_wire->(item)minecraft:redstone"};
-    m::rebuild();
+    OverridesGuard guard({"minecraft:redstone_wire->(item)minecraft:redstone"});
 
     auto d = blockCarry(ctx, "minecraft:redstone_wire");
     // Model override alone (client behaviour).
@@ -254,36 +278,49 @@ LO_REGISTER_SELFTEST("modeloverrides.precedence", [](Context& ctx) {
     ctx.check(v.kind == CarryVisual::Kind::Block && v.block == d.block, "no model overrides on a dedicated server");
 
     // Re-parsed on reload: a changed list applies at once.
-    cfg.modelOverrides.modelOverrides = {"minecraft:redstone_wire->(item)minecraft:stick"};
-    m::rebuild();
+    OverridesGuard::set({"minecraft:redstone_wire->(item)minecraft:stick"});
     auto r = m::configuredOverride(d.block, d.blockEntity);
     ctx.check(r && r->item == "minecraft:stick", "the list is re-parsed on reload");
-
-    cfg.modelOverrides.modelOverrides = saved;
-    m::rebuild();
 });
 
-LO_REGISTER_SELFTEST("modeloverrides.provider", [](Context& ctx) {
-    auto d = blockCarry(ctx, "minecraft:redstone_wire");
+LO_REGISTER_SELFTEST("modeloverrides.provider", [](Context& ctx) -> ll::coro::CoroTask<> {
+    OverridesGuard guard(carry::CarryClientConfig{}.modelOverrides.modelOverrides);
+    auto           d = blockCarry(ctx, "minecraft:redstone_wire");
+
+    // The server thread (stand-ins for vanilla clients, BDS) never applies model overrides.
     auto v = carry::visualFor(d);
-    auto lines = carry::extraDebugLines(ctx.player(), d);
+    ctx.check(v.kind == CarryVisual::Kind::Block && v.block == d.block, "no model override on the server thread");
+
+    auto lines   = carry::extraDebugLines(ctx.player(), d);
     bool hasLine = std::any_of(lines.begin(), lines.end(), [](std::string const& l) {
         return l.find("(item)minecraft:redstone") != std::string::npos;
     });
-    if (m::modelOverridesActive()) {
-        ctx.check(v.kind == CarryVisual::Kind::Item && v.item == "minecraft:redstone" && v.itemOverride, "visualFor applies the configured override (client)");
-        ctx.check(hasLine, "/carryon debug shows Override Model: (item)minecraft:redstone");
-    } else {
-        ctx.check(v.kind == CarryVisual::Kind::Block && v.block == d.block, "visualFor keeps the block on a dedicated server");
-        ctx.check(!hasLine, "no Override Model line on a dedicated server");
-    }
-    auto chest = blockCarry(ctx, "minecraft:chest");
+    ctx.check(hasLine == m::modelOverridesActive(), m::modelOverridesActive() ? "/carryon debug shows Override Model: (item)minecraft:redstone" : "no Override Model line on a dedicated server");
+    auto chest      = blockCarry(ctx, "minecraft:chest");
     auto chestLines = carry::extraDebugLines(ctx.player(), chest);
     ctx.check(std::none_of(chestLines.begin(), chestLines.end(), [](std::string const& l) {
         return l.find("(item)") != std::string::npos || l.find("(block)") != std::string::npos;
     }), "no Override Model line without a matching override");
 
     chest.scriptRender = {{"scale", "x=3,y=3,z=3"}};
-    auto sv = carry::visualFor(chest);
-    ctx.check(sv.scale == std::array{3.f, 3.f, 3.f}, "visualFor applies script render");
+    auto sv            = carry::visualFor(chest);
+    ctx.check(sv.scale == std::array{3.f, 3.f, 3.f}, "visualFor applies script render on the server thread");
+
+#ifdef LO_CLIENT
+    // The renderers' view: visualFor on the client thread applies the configured override.
+    struct Result {
+        std::atomic<bool> done{false};
+        CarryVisual       visual;
+    };
+    auto result = std::make_shared<Result>();
+    ll::thread::ClientThreadExecutor::getDefault().execute([result, d] {
+        result->visual = carry::visualFor(d);
+        result->done.store(true, std::memory_order_release);
+    });
+    for (int i = 0; i < 100 && !result->done.load(std::memory_order_acquire); ++i) co_await ctx.ticks(1);
+    ctx.require(result->done.load(std::memory_order_acquire), "the client thread ran visualFor");
+    auto const& cv = result->visual;
+    ctx.check(cv.kind == CarryVisual::Kind::Item && cv.item == "minecraft:redstone" && cv.itemOverride, "visualFor applies the configured override on the client thread");
+#endif
+    co_return;
 });

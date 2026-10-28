@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 
 #include "mc/deps/core/string/HashedString.h"
@@ -25,10 +26,16 @@
 #include "feature/carry/Lists.h"
 #include "game/Blocks.h"
 #include "game/Items.h"
+#include "game/WorldDb.h"
 #include "mod/Config.h"
 #include "mod/I18n.h"
 #include "mod/Log.h"
 #include "mod/Module.h"
+#include "net/CarryProtocol.h"
+
+#ifdef LO_CLIENT
+#include "ll/api/thread/ClientThreadExecutor.h"
+#endif
 
 namespace lo::feature::modeloverrides {
 
@@ -50,6 +57,14 @@ State& state() {
     static State s;
     return s;
 }
+
+#ifdef LO_CLIENT
+/// The client (render) thread; the provider applies model overrides only there.
+std::atomic<std::thread::id>& clientThread() {
+    static std::atomic<std::thread::id> id{};
+    return id;
+}
+#endif
 
 std::shared_ptr<std::vector<CompiledOverride> const> currentList() {
     std::lock_guard lock(state().mutex);
@@ -127,17 +142,12 @@ bool itemExists(std::string const& id) { return !game::makeItem(id).isNull(); }
 
 std::vector<CompiledOverride> compile(std::vector<std::string> const& entries, std::vector<std::string>* invalid) {
     std::vector<CompiledOverride> out;
-    for (auto const& text : entries) {
-        auto parsed = mo::parse(text);
-        if (!parsed) {
-            if (invalid && text.find_first_not_of(" \t\r\n") != std::string::npos) invalid->push_back(text);
-            continue;
-        }
-        CompiledOverride c{std::move(*parsed), std::nullopt};
+    for (auto& parsed : mo::parseAll(entries, invalid)) {
+        CompiledOverride c{std::move(parsed), std::nullopt};
         if (!c.entry.nbt.empty()) {
             auto tag = carry::parseNbt(c.entry.nbt);
             if (!tag) {
-                if (invalid) invalid->push_back(text);
+                if (invalid) invalid->push_back(c.entry.text);
                 continue;
             }
             if (!tag->empty()) c.nbt = std::move(*tag);
@@ -212,14 +222,13 @@ Block const* resolveBlock(std::string_view id, std::vector<core::carry::StateFil
     return resolved ? resolved.as_ptr() : nullptr;
 }
 
-std::string resolveBlockSnbt(std::string_view spec) {
+std::string resolveBlockSnbt(mo::BlockSpec const& spec) {
     thread_local Cache<std::string> cache;
-    std::string                     key(spec);
+    std::string                     key = spec.id;
+    for (auto const& f : spec.states) key += "\x1f" + f.name + "=" + f.value.value_or("");
     if (auto const* hit = cache.find(key)) return *hit;
     std::string out;
-    if (auto parsed = mo::parseBlockSpec(spec)) {
-        if (auto const* block = resolveBlock(parsed->id, parsed->states)) out = carry::toSnbt(*block->mSerializationId);
-    }
+    if (auto const* block = resolveBlock(spec.id, spec.states)) out = carry::toSnbt(*block->mSerializationId);
     return cache.put(std::move(key), std::move(out));
 }
 
@@ -255,6 +264,16 @@ bool modelOverridesActive() {
     return false;
 #endif
 }
+
+bool onClientThread() {
+#ifdef LO_CLIENT
+    return std::this_thread::get_id() == clientThread().load(std::memory_order_acquire);
+#else
+    return false;
+#endif
+}
+
+void invalidateCaches() { state().generation.fetch_add(1, std::memory_order_acq_rel); }
 
 std::optional<OverrideResult> configuredOverride(std::string const& blockSnbt, std::string const& blockEntitySnbt) {
     thread_local Cache<std::optional<OverrideResult>> cache;
@@ -299,7 +318,10 @@ std::string renderEntitySnbt(
 
 void applyVisual(CarryData const& data, CarryVisual& v, bool useModelOverrides) {
     std::optional<mo::ScriptRender> render;
-    if (data.scriptRender.is_object() && !data.scriptRender.empty()) render = mo::parseScriptRender(data.scriptRender);
+    if (data.scriptRender.is_object() && !data.scriptRender.empty()) {
+        render = mo::parseScriptRender(data.scriptRender);
+        if (render->empty()) render.reset();
+    }
 
     if (v.kind == CarryVisual::Kind::Block) {
         bool scripted = false;
@@ -325,15 +347,15 @@ void applyVisual(CarryData const& data, CarryVisual& v, bool useModelOverrides) 
     }
 
     if (render) {
-        v.translation = render->translation;
-        v.rotation    = render->rotation;
-        v.scale       = render->scale;
+        if (render->translation) v.translation = *render->translation;
+        if (render->rotation) v.rotation = *render->rotation;
+        if (render->scale) v.scale = *render->scale;
         for (int i = 0; i < 3; ++i) {
             if (render->leftArm[i]) v.leftArm[i] = render->leftArm[i];
             if (render->rightArm[i]) v.rightArm[i] = render->rightArm[i];
         }
-        v.renderLeftArm  = render->renderLeftArm;
-        v.renderRightArm = render->renderRightArm;
+        if (render->renderLeftArm) v.renderLeftArm = *render->renderLeftArm;
+        if (render->renderRightArm) v.renderRightArm = *render->renderRightArm;
     }
 }
 
@@ -347,7 +369,7 @@ void rebuild() {
         std::lock_guard lock(state().mutex);
         state().list = std::move(list);
     }
-    state().generation.fetch_add(1, std::memory_order_acq_rel);
+    invalidateCaches();
 }
 
 namespace {
@@ -357,8 +379,19 @@ public:
         rebuild();
         if (!mHooked) {
             config::onReload([] { rebuild(); });
+            // Cached results depend on the block / item registries of the current world.
+            game::db::onWorldReady([] { invalidateCaches(); });
+            game::db::onWorldClosed([] { invalidateCaches(); });
+#ifdef LO_CLIENT
+            client::carry::onConnected([] { invalidateCaches(); });
+#endif
             mHooked = true;
         }
+#ifdef LO_CLIENT
+        ll::thread::ClientThreadExecutor::getDefault().execute([] {
+            clientThread().store(std::this_thread::get_id(), std::memory_order_release);
+        });
+#endif
     }
     void uninstall() {}
 
@@ -377,7 +410,7 @@ LO_REGISTER_VISUAL_PROVIDER(lo::feature::carry::VisualProvider{
     .apply =
         [](lo::feature::carry::CarryData const& data, lo::feature::carry::CarryVisual& visual) {
             namespace m = lo::feature::modeloverrides;
-            m::applyVisual(data, visual, m::modelOverridesActive());
+            m::applyVisual(data, visual, m::onClientThread());
         },
 });
 
