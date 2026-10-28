@@ -26,13 +26,10 @@
 #include "mc/client/renderer/BaseActorRenderContext.h"
 #include "mc/client/renderer/actor/ActorRenderDispatcher.h"
 #include "mc/client/renderer/game/ItemInHandRenderer.h"
-#include "mc/dataloadhelper/DefaultDataLoadHelper.h"
 #include "mc/deps/core/math/Vec2.h"
 #include "mc/deps/core/math/Vec3.h"
 #include "mc/deps/ecs/WeakEntityRef.h"
 #include "mc/deps/ecs/gamerefs_entity/OwnerStorageEntity.h"
-#include "mc/deps/nbt/CompoundTag.h"
-#include "mc/deps/nbt/ListTag.h"
 #include "mc/deps/renderer/Camera.h"
 #include "mc/deps/renderer/MatrixStack.h"
 #include "mc/world/actor/Actor.h"
@@ -210,13 +207,14 @@ void zeroRotations(Actor& actor) {
     if (actor.hasCategory(ActorCategory::Mob)) static_cast<Mob&>(actor).setYBodyRotations(0.f, 0.f);
 }
 
-/// A client-only display actor built from the carried NBT (SPEC §4.1): rotations zeroed, hurt time
+/// A client-only display actor of the carried entity's type (SPEC §4.1): rotations zeroed, hurt time
 /// 0, no name tag, no leash. It waits above the build limit and is drawn only by us.
+/// Limitation: the rest of the carried NBT (variant, colour, age...) is not applied; `Actor::load`
+/// on a client display actor crashes the game, and the client factory's `loadActor` refuses.
 void buildActor(LocalPlayer& player, std::string const& snbt) {
     auto& c     = cache();
     auto* level = currentClient() ? currentClient()->getLevel() : nullptr;
-    auto  tag   = carry::parseNbt(snbt);
-    if (!level || !tag) return;
+    if (!level) return;
     auto id = carry::entityIdOf(snbt);
     if (id.empty()) return;
     auto park = parkPos(player);
@@ -232,18 +230,6 @@ void buildActor(LocalPlayer& player, std::string const& snbt) {
     c.entity    = weak;
     c.level     = level;
     c.dimension = static_cast<int>(player.getDimensionId());
-
-    // The carried entity's own data (variant, colour, age, equipment...), minus what must not show.
-    (*tag)["Pos"]               = ListTag{park.x, park.y, park.z};
-    (*tag)["Rotation"]          = ListTag{0.f, 0.f};
-    (*tag)["Motion"]            = ListTag{0.f, 0.f, 0.f};
-    (*tag)["UniqueID"]          = actor->getOrCreateUniqueID().rawID;
-    (*tag)["HurtTime"]          = short{0};
-    (*tag)["CustomName"]        = std::string{};
-    (*tag)["CustomNameVisible"] = false;
-    for (auto key : {"LinksTag", "Leasher", "LeasherID"}) tag->erase(key);
-    DefaultDataLoadHelper helper;
-    actor->load(*tag, helper);
     actor->setNameTag("");
     zeroRotations(*actor);
 }
