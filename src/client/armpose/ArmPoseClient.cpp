@@ -14,7 +14,12 @@
 #include "ll/api/event/client/ClientExitLevelEvent.h"
 #include "ll/api/event/world/ClientLevelTickEvent.h"
 
+#include "mc/client/game/ClientInstance.h"
+#include "mc/deps/core/file/PathView.h"
+#include "mc/deps/core/resource/ResourceLocation.h"
 #include "mc/deps/core/string/HashedString.h"
+#include "mc/resources/ResourcePackManager.h"
+#include "client/Client.h"
 #include "mc/legacy/ActorRuntimeID.h"
 #include "mc/legacy/ActorUniqueID.h"
 #include "mc/util/MolangScriptArg.h"
@@ -130,6 +135,19 @@ void tick(Level& level) {
                 t.pose.right.rotation[2],
                 p.evalMolang(ap::nativeVariable(ap::Side::Right, "x"))
             );
+            static bool checked = false;
+            if (!checked) {
+                checked = true;
+                std::string text;
+                bool        found = false;
+                if (auto* ci = client::currentClient()) {
+                    found = ci->getResourcePackManager().load(
+                        ResourceLocation(Core::PathView("animations/liftoff_carry.animation.json")),
+                        text
+                    );
+                }
+                log().info("armpose: client resource stack has the arm animations: {} ({} bytes)", found, text.size());
+            }
         }
         return true;
     });
