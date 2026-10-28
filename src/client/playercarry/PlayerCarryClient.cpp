@@ -9,7 +9,7 @@
 
 #include "mc/legacy/ActorUniqueID.h"
 #include "mc/world/actor/Actor.h"
-#include "mc/world/actor/player/LocalPlayer.h"
+#include "mc/client/player/LocalPlayer.h"
 #include "mc/world/level/Level.h"
 
 #include "client/Client.h"

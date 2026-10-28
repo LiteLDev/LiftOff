@@ -23,6 +23,7 @@
 #include "feature/carry/CarryConfig.h"
 #include "feature/carry/CarryData.h"
 #include "feature/carry/CarryStore.h"
+#include "feature/carry/Checks.h"
 #include "feature/carry/Slowness.h"
 #include "feature/playercarry/PlayerCarry.h"
 #include "game/Blocks.h"
@@ -343,4 +344,107 @@ LO_REGISTER_SELFTEST("playercarry.stack", [](Context& ctx) -> ll::coro::CoroTask
     p.target.stopRiding(true, false, false, false);
     cow->remove();
     finish(p);
+});
+
+// ---- client e2e helpers (tools/e2e/client/scenarios/playercarry.ps1) ------------------------------
+// They act on the first real (non-simulated) player and do nothing without one (server runs).
+
+namespace {
+Player* realPlayer() {
+    Player* found = nullptr;
+    if (auto level = ll::service::getLevel()) {
+        level->forEachPlayer([&](Player& p) {
+            if (!p.isSimulatedPlayer()) found = &p;
+            return found == nullptr;
+        });
+    }
+    return found;
+}
+
+/// A SimulatedPlayer the context does not track (the test disconnects it itself).
+SimulatedPlayer* spawnUntracked(Context& ctx, std::string const& name, Vec3 const& feet, float yaw) {
+    auto sp = SimulatedPlayer::create(name, feet, 0, Vec2{0.f, yaw});
+    ctx.require(static_cast<bool>(sp), "simulated player spawned");
+    return sp.as_ptr();
+}
+
+Vec3 aheadOf(Player& p, float dist) {
+    float yaw = p.getRotation().y * kPi / 180.f;
+    auto  f   = p.getFeetPos();
+    return Vec3{f.x - std::sin(yaw) * dist, f.y, f.z + std::cos(yaw) * dist};
+}
+} // namespace
+
+// The real player carries a SimulatedPlayer for 15 s (screenshots), then puts it down.
+LO_REGISTER_SELFTEST("playercarry.e2e_carry", [](Context& ctx) -> ll::coro::CoroTask<> {
+    auto* real = realPlayer();
+    if (!real) {
+        ctx.info("no real player: skipped");
+        co_return;
+    }
+    auto  uuid = real->getUuid();
+    auto* sim  = spawnUntracked(ctx, "lo_carried", aheadOf(*real, 1.f), real->getRotation().y + 180.f);
+    co_await ctx.ticks(10);
+    real = ll::service::getLevel()->getPlayer(uuid);
+    ctx.require(real != nullptr, "real player still online");
+    carry::setKeyPressed(*real, true);
+    bool picked = pc::tryPickup(*real, *sim);
+    carry::resetKeyPressed(*real);
+    ctx.check(picked, "the real player picks up the simulated player");
+    if (picked) {
+        co_await ctx.ticks(20);
+        real = ll::service::getLevel()->getPlayer(uuid);
+        if (real && sim->isRiding(real)) {
+            auto off = localOffset(*real, *sim);
+            ctx.info(std::format("carried offset (right, up, forward) {}", vecText(off)));
+            ctx.check(std::abs(off.y - pc::kUp) < 0.1f && std::abs(off.z - pc::kForward) < 0.1f, "seat 0.6 forward, 0.4 up");
+        }
+        ctx.info("CARRYING READY");
+        co_await ctx.ticks(300);
+        real = ll::service::getLevel()->getPlayer(uuid);
+        if (real) {
+            ctx.check(carry::get(*real).isPlayer(), "still carrying after 15 s");
+            auto     f = real->getFeetPos();
+            BlockPos below{static_cast<int>(std::floor(f.x)) + 2, static_cast<int>(std::floor(f.y)) - 1, static_cast<int>(std::floor(f.z))};
+            ctx.check(pc::tryPlace(*real, below, /*up*/ 1), "the real player puts the simulated player down");
+        }
+    }
+    co_await ctx.ticks(10);
+    sim->simulateDisconnect();
+});
+
+// A SimulatedPlayer carries the real player for up to 20 s; the scenario sneaks to get off.
+LO_REGISTER_SELFTEST("playercarry.e2e_carried", [](Context& ctx) -> ll::coro::CoroTask<> {
+    auto* real = realPlayer();
+    if (!real) {
+        ctx.info("no real player: skipped");
+        co_return;
+    }
+    auto  uuid = real->getUuid();
+    auto* sim  = spawnUntracked(ctx, "lo_carrier", aheadOf(*real, 1.5f), real->getRotation().y + 180.f);
+    sim->setPlayerGameType(carry::gameType(*real));
+    co_await ctx.ticks(10);
+    real = ll::service::getLevel()->getPlayer(uuid);
+    ctx.require(real != nullptr, "real player still online");
+    carry::setKeyPressed(*sim, true);
+    bool picked = pc::tryPickup(*sim, *real);
+    ctx.check(picked, "the simulated player picks up the real player");
+    if (picked) {
+        co_await ctx.ticks(40);
+        real = ll::service::getLevel()->getPlayer(uuid);
+        if (real && real->isRiding(sim)) {
+            auto off = localOffset(*sim, *real);
+            ctx.info(std::format("real player offset (right, up, forward) {}", vecText(off)));
+        }
+        ctx.info("CARRIED READY");
+        bool released = false;
+        for (int i = 0; i < 400 && !released; i += 5) {
+            co_await ctx.ticks(5);
+            released = !carry::isCarrying(*sim);
+        }
+        ctx.info(std::format("released by the client: {}", released));
+    }
+    pc::release(*sim, "test end");
+    co_await ctx.ticks(5);
+    sim->simulateDisconnect();
 });
