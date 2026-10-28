@@ -134,7 +134,8 @@ struct State {
     std::unordered_set<std::int64_t>                          dirty; ///< carriers whose carry changed
     std::unordered_set<std::int64_t>                          announced;
     std::unordered_map<std::int64_t, std::vector<SentPacket>> testViewers;
-    std::int64_t                                              tick = 0;
+    std::int64_t                                              tick      = 0;
+    bool                                                      installed = false;
 };
 State& state() {
     static State s;
@@ -286,7 +287,8 @@ void tick() {
             if (pair.version < 0) pair.modded = net::isModded(*viewer);
             if (pair.version != c.version || resend) {
                 sendAnimations(*viewer, *carrier, c.anims);
-                if (pair.version != c.version && !self && !pair.modded) {
+                // A (re)announced carrier may have lost its stand-in on that client too: show it again.
+                if (!self && !pair.modded) {
                     if (pair.standIn) sendRemove(*viewer, pair.standIn);
                     pair.standIn = 0;
                     if (at) {
@@ -314,7 +316,7 @@ LL_TYPE_INSTANCE_HOOK(
     std::unique_ptr<Packet>
 ) {
     auto pkt = origin();
-    state().announced.insert(idOf(*this));
+    if (state().installed) state().announced.insert(idOf(*this));
     return pkt;
 }
 
@@ -348,7 +350,9 @@ public:
         mListener = bus.emplaceListener<ll::event::ServerLevelTickEvent>([](auto&) { tick(); });
         if (!mRegistered) {
             mRegistered = true;
-            carry::onCarryChanged([](Player& p, CarryData const&, CarryData const&) { state().dirty.insert(idOf(p)); });
+            carry::onCarryChanged([](Player& p, CarryData const&, CarryData const&) {
+                if (state().installed) state().dirty.insert(idOf(p));
+            });
             game::db::onWorldClosed([] {
                 auto& s = state();
                 s.carriers.clear();
@@ -358,6 +362,7 @@ public:
                 s.testViewers.clear();
             });
         }
+        state().installed = true;
         ArmPoseAddPlayerHook::hook();
     }
     void uninstall() {
@@ -380,6 +385,10 @@ public:
         }
         s.carriers.clear();
         s.pairs.clear();
+        s.dirty.clear();
+        s.announced.clear();
+        s.testViewers.clear();
+        s.installed = false;
     }
 
 private:

@@ -242,10 +242,12 @@ LO_REGISTER_SELFTEST("armpose.entity", [](Context& ctx) -> ll::coro::CoroTask<> 
     carry::removeCapturedActor(*pig);
 
     auto box = armpose::entityBox(d.entity);
-    ctx.check(box.ok && near(box.width, 0.9f) && near(box.height, 0.9f), "pig box from its NBT (0.9 x 0.9)");
+    // Spawned pigs are sometimes babies (half size): compare with the measured box.
+    float size = box.scale < 0.75f ? 0.45f : 0.9f;
+    ctx.check(box.ok && near(box.width, size) && near(box.height, size), "pig box from its NBT (0.9 x 0.9, baby 0.45)");
     auto pose = armpose::poseFor(d);
     ctx.check(near(pose.right.rotation[0], -1.3f), "entity: x = -1.3");
-    ctx.check(near(pose.right.rotation[1], (0.81f - 1.0f) / 1.5f), "entity: offset from width * 0.9");
+    ctx.check(near(pose.right.rotation[1], (box.width * 0.9f - 1.0f) / 1.5f), "entity: offset from width * 0.9");
 
     carry::set(*carrier, d);
     co_await ctx.ticks(2);
@@ -255,7 +257,7 @@ LO_REGISTER_SELFTEST("armpose.entity", [](Context& ctx) -> ll::coro::CoroTask<> 
     auto adds = ofKind(sent, "add");
     ctx.require(adds.size() == 1, "one stand-in");
     ctx.check(adds[0].name == "minecraft:pig", "the stand-in is a pig");
-    float want = 0.6f * 1.666f * (10.0f - 0.81f) * 0.08f;
+    float want = box.scale * 0.6f * 1.666f * (10.0f - box.width * box.height) * 0.08f;
     ctx.check(near(adds[0].detail.value("scale", 0.0f), want), "scaled like Carry On's third-person view");
     ctx.check(ofKind(sent, "equip").empty(), "an entity stand-in wears nothing");
     teardown(*carrier, *viewer);
@@ -324,7 +326,10 @@ LO_REGISTER_SELFTEST("armpose.reannounce", [](Context& ctx) -> ll::coro::CoroTas
         ofKind(sent, "animate").size() == ap::allControllers().size(),
         "arm pose re-sent after the carrier was re-announced"
     );
-    ctx.check(ofKind(sent, "add").empty(), "the stand-in is not duplicated");
+    ctx.check(
+        ofKind(sent, "remove").size() == 1 && ofKind(sent, "add").size() == 1,
+        "the stand-in is shown again (replaced, not duplicated)"
+    );
     teardown(*carrier, *viewer);
 });
 

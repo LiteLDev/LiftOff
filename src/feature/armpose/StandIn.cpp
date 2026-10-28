@@ -348,13 +348,8 @@ Placement placementFor(StandIn const& standIn, Player const& carrier) {
     bool  lying   = carrier.isSwimming() || carrier.isGliding(); // as the animations
     float centreY = lying ? kSwimY : kHoldY - (carrier.isSneaking() ? kSneakDrop : 0.0f);
     float ahead   = lying ? kSwimForward : kForward;
-    float bottom  = 0.0f; // stand-in feet relative to the centre
-    if (standIn.kind == StandIn::Kind::Item) {
-        bottom = -standIn.height * 0.5f; // a falling block stands on its bottom centre
-    } else {
-        bottom = -standIn.height * 0.5f;
-        if (!lying) ahead = std::max(kForward, 0.25f + standIn.width * 0.5f);
-    }
+    float bottom  = -standIn.height * 0.5f; // display blocks and mobs stand on their bottom centre
+    if (standIn.kind == StandIn::Kind::Entity && !lying) ahead = std::max(kForward, 0.25f + standIn.width * 0.5f);
     p.pos = Vec3{feet.x + forward.x * ahead, feet.y + centreY + bottom, feet.z + forward.z * ahead};
     return p;
 }

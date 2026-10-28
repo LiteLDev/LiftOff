@@ -49,15 +49,28 @@ bool parsed(ActorAnimationGroup& group, char const* name) {
     return info && info->mPtr.get() != nullptr;
 }
 
-void const*& doneLevel() {
-    static void const* done = nullptr;
-    return done;
+constexpr int kRetryTicks = 20; ///< ticks between attempts while the client is not ready
+constexpr int kAttempts   = 15;
+
+struct LoadState {
+    void const* level    = nullptr; ///< identity only: the level the animations are ready for
+    int         attempts = 0;
+    int         wait     = 0;
+};
+LoadState& loadState() {
+    static LoadState s;
+    return s;
 }
 
 void ensureAnimations(Level& level) {
-    auto& done = doneLevel();
-    if (done == &level) return;
-    done     = &level;
+    auto& st = loadState();
+    if (st.level == &level || st.attempts >= kAttempts) return;
+    if (st.wait > 0) {
+        --st.wait;
+        return;
+    }
+    ++st.attempts;
+    st.wait  = kRetryTicks;
     auto* ci = currentClient();
     if (!ci) return;
     auto groupPtr = ci->getActorAnimationGroup(); // the client's group (a client level has none)
@@ -81,8 +94,12 @@ void ensureAnimations(Level& level) {
             after = parsed(group, ap::kNoneAnimation);
         }
     }
-    if (after) log().info("armpose: arm animations ready on the client{}", before ? "" : " (loaded by LiftOff)");
-    else log().warn("armpose: the arm animations are missing on the client ({})", kAnimationFile);
+    if (after) {
+        st.level = &level;
+        log().info("armpose: arm animations ready on the client{}", before ? "" : " (loaded by LiftOff)");
+    } else if (st.attempts >= kAttempts) {
+        log().warn("armpose: the arm animations are missing on the client ({})", kAnimationFile);
+    }
 }
 } // namespace
 
@@ -94,7 +111,7 @@ public:
             [](ll::event::ClientLevelTickEvent& ev) { ensureAnimations(ev.level()); }
         ));
         mListeners.push_back(bus.emplaceListener<ll::event::ClientExitLevelEvent>([](auto&) {
-            doneLevel() = nullptr;
+            loadState() = LoadState{};
         }));
     }
     void uninstall() {
