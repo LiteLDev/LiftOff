@@ -2,10 +2,12 @@
 
 // U1: block pickup (docs/SPEC.md §3.1). Server thread.
 //
-// Trigger: use-block (PlayerInteractBlockEvent, also sent for an empty hand). The checks (steps 1-12)
-// run inside the event; when they all pass the interaction is cancelled (the block is not opened)
-// and the world edit (steps 13-17) runs on the next server tick, because a cancelled interaction
-// rolls back block changes made during it. Refusals are silent and leave the interaction alone.
+// Trigger: use-block (PlayerInteractBlockEvent: LeviLamina's GameMode::useItemOn hook, also called
+// for an empty hand). Steps 1-11 run inside the event; when they pass, the interaction is cancelled
+// (the block is not opened) and the rest runs on the next server tick, because a cancelled
+// interaction rolls back block changes made during it: steps 1-10 again (the world may have changed),
+// the script stage (12, its commandPickup may edit the world) and the pickup (13-17). Refusals are
+// silent and leave the interaction alone.
 //
 //   auto r = blockpickup::evaluate(player, region, pos, data);   // steps 1-12, `data` filled on success
 //   if (r == blockpickup::Refusal::None) blockpickup::perform(player, region, pos, std::move(data));
@@ -46,9 +48,9 @@ enum class Refusal {
 /// earlier check passed.
 [[nodiscard]] Refusal evaluate(Player& player, BlockSource& region, BlockPos const& pos, carry::CarryData& data);
 
-/// Steps 13-17: captures the block again (fresh contents), removes it without drops, stores the
-/// carry, plays the hit sound, swings, applies Slowness and logs. False when the block is gone or
-/// the player started carrying in the meantime (nothing changed then).
+/// Steps 13-17: captures the block again (fresh contents), stores the carry, removes the block
+/// without drops, plays the hit sound, swings, applies Slowness and logs. False when the block is
+/// gone or the player already carries something (nothing changed then).
 bool perform(Player& player, BlockSource& region, BlockPos const& pos, carry::CarryData data);
 
 /// Carry On's lock test: the block actor SNBT has a `Lock` key (any value).

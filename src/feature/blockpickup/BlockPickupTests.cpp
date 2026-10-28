@@ -421,6 +421,11 @@ LO_REGISTER_SELFTEST("blockpickup.hooks", [](Context& ctx) -> ll::coro::CoroTask
     ctx.check(!carry::isCarrying(p), "refused silently");
     ctx.check(regionOf(ctx).getBlock(lo::game::blockPos(barrel)).getTypeName() == "minecraft:barrel", "the barrel stays");
     gHooks.protect = false;
+    gHooks.script  = true; // the script stage runs on the tick after the click
+    co_await click(ctx, barrel);
+    ctx.check(!carry::isCarrying(p) && !bp::isPending(p), "script refusal: nothing carried");
+    ctx.check(regionOf(ctx).getBlock(lo::game::blockPos(barrel)).getTypeName() == "minecraft:barrel", "script refusal: the barrel stays");
+    gHooks.script = false;
     co_await click(ctx, barrel);
     ctx.require(carry::isCarrying(p), "picked up");
     ctx.check(carry::get(p).activeScript == "selftest_script", "the script is active in the carry");
@@ -556,16 +561,21 @@ LO_REGISTER_SELFTEST("blockpickup.repeat", [](Context& ctx) -> ll::coro::CoroTas
     auto    feet = ctx.testPos(195);
     ctx.require(co_await setup(ctx, feet), "test area loaded");
     carry::setKeyPressed(p, true);
-    auto at = offset(feet, 1);
-    ctx.require(ctx.setBlock(at, "minecraft:barrel"), "barrel placed");
+    auto at    = offset(feet, 1);
+    auto other = offset(feet, 0, 0, 1);
+    ctx.require(ctx.setBlock(at, "minecraft:barrel") && ctx.setBlock(other, "minecraft:barrel"), "barrels placed");
     co_await ctx.ticks(1);
     BlockPos pos = lo::game::blockPos(at);
+    BlockPos alt = lo::game::blockPos(other);
     useOn(p, pos);
     ctx.check(bp::isPending(p), "accepted pickup waits for the next tick");
     ctx.check(!carry::isCarrying(p), "nothing carried inside the use-block event");
+    ctx.check(regionOf(ctx).getBlock(pos).getTypeName() == "minecraft:barrel", "no world edit inside the event");
     useOn(p, pos);
+    useOn(p, alt); // another block in the same tick: accepted as its own attempt
     co_await ctx.ticks(2);
     ctx.require(carry::isCarrying(p), "picked up");
     ctx.check(!bp::isPending(p), "nothing pending");
-    ctx.check(regionOf(ctx).getBlock(pos).isAir(), "the barrel is gone");
+    ctx.check(regionOf(ctx).getBlock(pos).isAir(), "the first barrel is gone");
+    ctx.check(regionOf(ctx).getBlock(alt).getTypeName() == "minecraft:barrel", "only one block is picked up");
 });
