@@ -44,8 +44,8 @@ void applyScriptTransform(glm::mat4& m, feature::carry::CarryVisual const& visua
 struct DrawStatus {
     enum class Kind { None, Block, Item, Entity };
     Kind          kind = Kind::None;
-    std::string   what;       ///< item / entity id drawn ("" = nothing)
-    std::uint64_t frames = 0; ///< frames drawn for the current carry
+    std::string   what;               ///< item / entity id drawn ("" = nothing)
+    std::uint64_t frames     = 0;     ///< frames drawn for the current carry
     bool          actorAlive = false; ///< a display actor is cached
 };
 [[nodiscard]] DrawStatus status();

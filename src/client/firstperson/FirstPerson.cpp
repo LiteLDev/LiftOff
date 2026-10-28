@@ -7,7 +7,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <vector>
 
 #include "glm/gtc/constants.hpp"
 #include "glm/gtc/matrix_transform.hpp"
@@ -22,6 +21,7 @@
 #include "mc/client/game/ClientInstance.h"
 #include "mc/client/gui/screens/ScreenContext.h"
 #include "mc/client/multiplayer/ClientLevel.h"
+#include "mc/client/options/IOptionRegistry.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/BaseActorRenderContext.h"
 #include "mc/client/renderer/actor/ActorRenderDispatcher.h"
@@ -29,21 +29,20 @@
 #include "mc/dataloadhelper/DefaultDataLoadHelper.h"
 #include "mc/deps/core/math/Vec2.h"
 #include "mc/deps/core/math/Vec3.h"
-#include "mc/deps/ecs/gamerefs_entity/GameRefsEntity.h"
-#include "mc/deps/ecs/gamerefs_entity/OwnerStorageEntity.h"
 #include "mc/deps/ecs/WeakEntityRef.h"
+#include "mc/deps/ecs/gamerefs_entity/OwnerStorageEntity.h"
 #include "mc/deps/nbt/CompoundTag.h"
 #include "mc/deps/nbt/ListTag.h"
 #include "mc/deps/renderer/Camera.h"
 #include "mc/deps/renderer/MatrixStack.h"
 #include "mc/world/actor/Actor.h"
+#include "mc/world/actor/ActorCategory.h"
 #include "mc/world/actor/ActorDefinitionIdentifier.h"
 #include "mc/world/actor/ActorFactory.h"
+#include "mc/world/actor/Mob.h"
 #include "mc/world/actor/provider/ActorMovement.h"
 #include "mc/world/actor/provider/PlayerMovement.h"
-#include "mc/client/options/IOptionRegistry.h"
 #include "mc/world/item/ItemStack.h"
-#include "mc/world/level/ActorGarbageCollector.h"
 #include "mc/world/level/block/Block.h"
 #include "mc/world/level/dimension/Dimension.h"
 
@@ -129,35 +128,43 @@ namespace {
 
 /// The cached render state of the local player's carry.
 struct Cache {
-    std::optional<CarryData> data;   ///< the carry the cache was built for
-    CarryVisual              visual; ///< its visual
-    bool                     chest = false;
-    ItemStack                item;           ///< block / item visual
-    std::optional<WeakEntityRef> entity;     ///< entity visual: a client-only display actor of the level
-    Level*                   level = nullptr; ///< the level the actor belongs to
-    int                      dimension = -1;  ///< the dimension the actor was built in
-    bool                     logged = false;
+    std::optional<CarryData>     data;   ///< the carry the cache was built for
+    CarryVisual                  visual; ///< its visual
+    std::string                  what;   ///< item / entity id drawn (selftests, log)
+    bool                         chest = false;
+    ItemStack                    item;                ///< block / item visual
+    std::optional<WeakEntityRef> entity;              ///< entity visual: a client-only display actor
+    Level*                       level     = nullptr; ///< the level that owns the display actor
+    int                          dimension = -1;      ///< the dimension the display actor lives in
+    bool                         logged    = false;
 };
 
 Cache& cache() {
-    // Never destroyed: the item stack and actor handle must not be torn down after the game at exit.
+    // Never destroyed: the item stack must not be torn down after the game at process exit.
     static auto* c = new Cache;
     return *c;
 }
 
-std::mutex  gStatusMutex;
-DrawStatus  gStatus;
-bool        gDumped = false; // TEMP: matrix dump for calibration
+std::mutex gStatusMutex;
+DrawStatus gStatus;
 
-void setStatus(DrawStatus::Kind kind, std::string what, bool count) {
+void setStatus(DrawStatus::Kind kind, std::string const& what, bool count) {
+    bool            alive = cache().entity.has_value();
     std::lock_guard lock(gStatusMutex);
     if (gStatus.kind != kind || gStatus.what != what) {
         gStatus.kind   = kind;
-        gStatus.what   = std::move(what);
+        gStatus.what   = what;
         gStatus.frames = 0;
     }
     if (count) ++gStatus.frames;
-    gStatus.actorAlive = cache().entity.has_value();
+    gStatus.actorAlive = alive;
+}
+
+/// The fields of a carry that decide what is drawn (a re-sync that only refreshes the hotbar slot,
+/// tick or key state keeps the cache and the display actor).
+bool sameVisual(CarryData const& a, CarryData const& b) {
+    return a.type == b.type && a.block == b.block && a.blockEntity == b.blockEntity && a.entity == b.entity
+        && a.player == b.player && a.activeScript == b.activeScript && a.scriptRender == b.scriptRender;
 }
 
 Actor* cachedActor() {
@@ -167,14 +174,13 @@ Actor* cachedActor() {
 }
 
 /// Where the display actor waits between frames: above the build limit, out of sight (the level
-/// renderer draws display actors too); it is moved to the player only while we draw it.
+/// renderer draws display actors too). It is moved to the player only while we draw it.
 Vec3 parkPos(LocalPlayer& player) {
     auto const& p = player.getPosition();
     return Vec3{p.x, static_cast<float>(player.getDimension().mHeightRange->mMax + 256), p.z};
 }
 
-/// Releases the display actor. `levelAlive`: the level that owns it still exists (else it is
-/// abandoned: its registry is gone with the level).
+/// Removes the display actor. `levelAlive` false: the level (and the actor with it) is gone.
 void releaseActor(bool levelAlive) {
     auto& c = cache();
     if (c.entity.has_value()) {
@@ -190,35 +196,56 @@ void resetCache(bool levelAlive) {
     releaseActor(levelAlive);
     c.data.reset();
     c.visual = {};
+    c.what.clear();
     c.item   = ItemStack{};
     c.chest  = false;
     c.logged = false;
     setStatus(DrawStatus::Kind::None, {}, false);
 }
 
+/// Zeroes every rotation of the display actor (SPEC §4.1).
+void zeroRotations(Actor& actor) {
+    actor.setRotationWrapped(Vec2{0.f, 0.f});
+    actor.setYHeadRotations(0.f, 0.f);
+    if (actor.hasCategory(ActorCategory::Mob)) static_cast<Mob&>(actor).setYBodyRotations(0.f, 0.f);
+}
 
-/// A client-only display actor of the carried type (SPEC §4.1): rotations zeroed, hurt time 0, no
-/// name tag, no leash. It waits above the build limit and is drawn only by us.
+/// A client-only display actor built from the carried NBT (SPEC §4.1): rotations zeroed, hurt time
+/// 0, no name tag, no leash. It waits above the build limit and is drawn only by us.
 void buildActor(LocalPlayer& player, std::string const& snbt) {
     auto& c     = cache();
     auto* level = currentClient() ? currentClient()->getLevel() : nullptr;
-    if (!level) return;
+    auto  tag   = carry::parseNbt(snbt);
+    if (!level || !tag) return;
     auto id = carry::entityIdOf(snbt);
     if (id.empty()) return;
-    auto owner = level->getActorFactory().clientCreateDisplayActor(
-        ActorDefinitionIdentifier(id), &player, parkPos(player), Vec2{0.f, 0.f}
-    );
+    auto park = parkPos(player);
+    auto owner =
+        level->getActorFactory().clientCreateDisplayActor(ActorDefinitionIdentifier(id), &player, park, Vec2{0.f, 0.f});
     if (!owner) {
         log().warn("firstperson: cannot create a display actor for {}", id);
         return;
     }
-    WeakEntityRef weak = owner->getWeakRef();
+    WeakEntityRef weak  = owner->getWeakRef();
     auto*         actor = level->addDisplayEntity(player.getDimensionBlockSource(), std::move(owner));
     if (!actor) return;
     c.entity    = weak;
     c.level     = level;
     c.dimension = static_cast<int>(player.getDimensionId());
+
+    // The carried entity's own data (variant, colour, age, equipment...), minus what must not show.
+    (*tag)["Pos"]               = ListTag{park.x, park.y, park.z};
+    (*tag)["Rotation"]          = ListTag{0.f, 0.f};
+    (*tag)["Motion"]            = ListTag{0.f, 0.f, 0.f};
+    (*tag)["UniqueID"]          = actor->getOrCreateUniqueID().rawID;
+    (*tag)["HurtTime"]          = short{0};
+    (*tag)["CustomName"]        = std::string{};
+    (*tag)["CustomNameVisible"] = false;
+    for (auto key : {"LinksTag", "Leasher", "LeasherID"}) tag->erase(key);
+    DefaultDataLoadHelper helper;
+    actor->load(*tag, helper);
     actor->setNameTag("");
+    zeroRotations(*actor);
 }
 
 void rebuild(CarryData const& data, LocalPlayer& player) {
@@ -228,21 +255,23 @@ void rebuild(CarryData const& data, LocalPlayer& player) {
     c.visual = carry::visualFor(data);
     switch (c.visual.kind) {
     case CarryVisual::Kind::Block: {
-        // Carry On draws the item of the block's default state.
-        c.chest = isChest(carry::carriedBlockId(CarryData{.type = carry::CarryType::Block, .block = c.visual.block}));
-        if (auto tag = carry::parseNbt(c.visual.block)) {
-            if (auto state = Block::tryGetFromRegistry(*tag)) {
-                auto def = Block::tryGetFromRegistry(HashedString{state->getTypeName()});
-                c.item.reinit(def ? *def : *state, 1);
-            }
+        // Carry On draws the item of the block's default state (nothing when it has no item).
+        auto blockOnly = CarryData{.type = carry::CarryType::Block, .block = c.visual.block};
+        c.chest        = isChest(carry::carriedBlockId(blockOnly));
+        if (auto* state = carry::carriedBlock(blockOnly)) {
+            auto def = Block::tryGetFromRegistry(HashedString{state->getTypeName()});
+            c.item.reinit(def ? *def : *state, 1);
         }
+        c.what = c.item.isNull() ? std::string{} : c.item.getTypeName();
         break;
     }
     case CarryVisual::Kind::Item:
         c.chest = isChest(carry::carriedBlockId(data));
         c.item  = game::makeItem(c.visual.item);
+        c.what  = c.item.isNull() ? std::string{} : c.item.getTypeName();
         break;
     case CarryVisual::Kind::Entity:
+        c.what = carry::entityIdOf(c.visual.entity);
         buildActor(player, c.visual.entity);
         break;
     default:
@@ -250,40 +279,23 @@ void rebuild(CarryData const& data, LocalPlayer& player) {
     }
 }
 
-std::string describe(Cache const& c) {
-    switch (c.visual.kind) {
-    case CarryVisual::Kind::Block:
-    case CarryVisual::Kind::Item:
-        return c.item.isNull() ? std::string{} : c.item.getTypeName();
-    case CarryVisual::Kind::Entity:
-        return carry::entityIdOf(c.visual.entity);
-    default:
-        return {};
+/// Moves the display actor to the player for one draw and back to its park position afterwards
+/// (also when the draw throws).
+struct ActorAtPlayer {
+    Actor&       actor;
+    LocalPlayer& player;
+    ActorAtPlayer(Actor& a, LocalPlayer& p) : actor(a), player(p) {
+        actor._setPos(player.getPosition());
+        zeroRotations(actor);
     }
-}
+    ~ActorAtPlayer() { actor._setPos(parkPos(player)); }
+    ActorAtPlayer(ActorAtPlayer const&)            = delete;
+    ActorAtPlayer& operator=(ActorAtPlayer const&) = delete;
+};
 
-void dumpMatrices(char const* what, BaseActorRenderContext& ctx, Matrix const& prevProj) {
-    if (gDumped) return;
-    gDumped     = true;
-    auto& cam   = ctx.mScreenContext.camera;
-    auto  print = [](char const* name, glm::mat4 const& m) {
-        log().info(
-            "firstperson: {} = [{:.3f} {:.3f} {:.3f} {:.3f} | {:.3f} {:.3f} {:.3f} {:.3f} | {:.3f} {:.3f} {:.3f} {:.3f} | {:.3f} {:.3f} {:.3f} {:.3f}]",
-            name, m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3], m[2][0], m[2][1], m[2][2],
-            m[2][3], m[3][0], m[3][1], m[3][2], m[3][3]
-        );
-    };
-    print("world", *cam.worldMatrixStack->top()._m);
-    print("view", *cam.viewMatrixStack->top()._m);
-    print("proj", *cam.projectionMatrixStack->top()._m);
-    print("prevProj", *prevProj._m);
-    log().info("firstperson: {} world={} view={} proj={}", what, cam.worldMatrixStack->stack->size(),
-               cam.viewMatrixStack->stack->size(), cam.projectionMatrixStack->stack->size());
-}
-
-/// Draws the local player's carry instead of the hand. False: not carrying a block / entity (the
-/// vanilla hand renders).
-bool renderCarried(ItemInHandRenderer& self, BaseActorRenderContext& ctx, Matrix const& prevProj, ItemContextFlags flags) {
+/// Draws the local player's carry instead of the hand. False: not carrying a block or an entity (the
+/// vanilla hand renders; Carry On draws nothing in first person for a carried player).
+bool renderCarried(ItemInHandRenderer& self, BaseActorRenderContext& ctx, ItemContextFlags flags) {
     auto* player = currentPlayer();
     auto* data   = player ? lo::client::carry::localData() : nullptr;
     if (!data || !(data->isBlock() || data->isEntity())) {
@@ -292,15 +304,16 @@ bool renderCarried(ItemInHandRenderer& self, BaseActorRenderContext& ctx, Matrix
     }
     auto& c = cache();
     // Rebuilt when the carry changes, and the display actor when the player changed dimension.
-    if (!c.data || *c.data != *data
+    if (!c.data || !sameVisual(*c.data, *data)
         || (c.entity.has_value() && c.dimension != static_cast<int>(player->getDimensionId()))) {
         rebuild(*data, *player);
     }
 
     auto const& s   = config::get<carry::CarryClientConfig>().settings;
     auto&       cam = ctx.mScreenContext.camera;
-    dumpMatrices("enter", ctx, prevProj);
 
+    // Here view * world is the identity and the projection is the hand's (FOV 70), as in Java's
+    // RenderHandEvent; vanilla's own hand bobbing lives inside the function we replace.
     glm::mat4 base{1.f};
     if (auto* client = currentClient(); client && client->getOptions().getBobView()) {
         float alpha = ctx.mFrameAlpha;
@@ -309,40 +322,39 @@ bool renderCarried(ItemInHandRenderer& self, BaseActorRenderContext& ctx, Matrix
         base        = viewBobTransform(ActorMovement::getPredictedWalkDist(ent, alpha), bob);
     }
 
+    auto kind = DrawStatus::Kind::None;
     switch (c.visual.kind) {
     case CarryVisual::Kind::Block:
     case CarryVisual::Kind::Item: {
+        kind = c.visual.kind == CarryVisual::Kind::Block ? DrawStatus::Kind::Block : DrawStatus::Kind::Item;
         if (c.item.isNull()) break;
-        auto ref = cam.worldMatrixStack->push(false);
-        auto& m  = *ref.mat->_m;
-        m        = m * base * blockTransform(s.facePlayer, c.chest, c.visual);
+        auto  ref = cam.worldMatrixStack->push(false);
+        auto& m   = *ref.mat->_m;
+        m         = m * base * blockTransform(s.facePlayer, c.chest, c.visual);
         self.renderItem(ctx, *player, c.item, false, flags, true, true);
-        setStatus(c.visual.kind == CarryVisual::Kind::Block ? DrawStatus::Kind::Block : DrawStatus::Kind::Item,
-                  describe(c), true);
         break;
     }
     case CarryVisual::Kind::Entity: {
+        kind        = DrawStatus::Kind::Entity;
         auto* actor = cachedActor();
         if (!actor) break;
-        auto const& ppos = player->getPosition();
-        actor->_setPos(ppos);
-        actor->setRotationWrapped(Vec2{0.f, 0.f});
-        float h  = carry::entityHeight(*actor);
-        float w  = carry::entityWidth(*actor);
-        auto ref = cam.worldMatrixStack->push(false);
-        auto& m  = *ref.mat->_m;
-        m        = m * base * entityTransform(h, w, s.rotateEntitiesSideways, c.visual);
+        ActorAtPlayer at(*actor, *player);
+        auto const&   ppos = player->getPosition();
+        float         h    = carry::entityHeight(*actor);
+        float         w    = carry::entityWidth(*actor);
+        auto          ref  = cam.worldMatrixStack->push(false);
+        auto&         m    = *ref.mat->_m;
+        m                  = m * base * entityTransform(h, w, s.rotateEntitiesSideways, c.visual);
         ctx.mEntityRenderDispatcher->render(ctx, *actor, ppos, ppos, Vec2{0.f, 0.f}, false);
-        actor->_setPos(parkPos(*player));
-        setStatus(DrawStatus::Kind::Entity, describe(c), true);
         break;
     }
     default:
         break;
     }
+    setStatus(kind, c.what, true);
     if (!c.logged) {
         c.logged = true;
-        log().info("firstperson: drawing {} {}", carry::carryTypeName(data->type), describe(c));
+        log().info("firstperson: drawing {} {}", carry::carryTypeName(data->type), c.what);
     }
     return true;
 }
@@ -368,7 +380,7 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     bool handled = false;
     try {
-        handled = renderCarried(*this, ctx, prevProj, flags);
+        handled = renderCarried(*this, ctx, flags);
     } catch (std::exception const& e) {
         static bool once = false;
         if (!once) {

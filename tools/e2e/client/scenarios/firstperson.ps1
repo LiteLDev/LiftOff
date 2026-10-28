@@ -35,7 +35,7 @@ Invoke-HeldSelfTest 'firstperson.chest' {
     Save-Screenshot 'chest-third-front' | Out-Null
     Press-Key F5; Start-Sleep -Milliseconds 300
 } | Out-Null
-Reset-CameraPerspective
+Reset-CameraPerspective   # options.txt only: the next launch starts in first person even if an F5 was lost
 
 Invoke-HeldSelfTest 'firstperson.furnace' {
     Start-Sleep -Milliseconds 300
@@ -48,5 +48,6 @@ Invoke-HeldSelfTest 'firstperson.pig' {
 } | Out-Null
 
 Save-Screenshot 'after' | Out-Null
-Wait-LogLine 'firstperson: drawing block minecraft:chest' 5 | Out-Null
-Wait-LogLine 'firstperson: drawing entity minecraft:pig' 5 | Out-Null
+foreach ($line in 'firstperson: drawing block minecraft:chest', 'firstperson: drawing entity minecraft:pig') {
+    if (-not (Get-LeviLog | Where-Object { $_ -match $line })) { throw "missing log line '$line'" }
+}

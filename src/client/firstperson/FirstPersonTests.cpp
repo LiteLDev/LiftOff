@@ -97,8 +97,12 @@ ll::coro::CoroTask<> showCarry(Context& ctx, CarryData data, Kind kind, std::str
 } // namespace
 
 LO_REGISTER_SELFTEST("firstperson.is_chest", [](Context& ctx) {
-    for (auto id : {"minecraft:chest", "minecraft:trapped_chest", "minecraft:ender_chest", "minecraft:copper_chest",
-                    "minecraft:waxed_oxidized_copper_chest"}) {
+    for (auto id :
+         {"minecraft:chest",
+          "minecraft:trapped_chest",
+          "minecraft:ender_chest",
+          "minecraft:copper_chest",
+          "minecraft:waxed_oxidized_copper_chest"}) {
         ctx.check(fp::isChest(id), std::string(id) + " is a chest");
     }
     for (auto id : {"minecraft:barrel", "minecraft:furnace", "minecraft:chest_minecart", "minecraft:shulker_box"}) {
@@ -151,8 +155,12 @@ LO_REGISTER_SELFTEST("firstperson.chest", [](Context& ctx) -> ll::coro::CoroTask
     auto cap = carry::captureBlock(region, bp);
     ctx.require(cap.has_value(), "chest captured");
     if (auto box = region.tryGetContainer(bp)) box->removeAllItems(); // no drops at cleanup
-    co_await showCarry(ctx, CarryData{.type = CarryType::Block, .block = cap->block, .blockEntity = cap->blockEntity},
-                       Kind::Block, "minecraft:chest");
+    co_await showCarry(
+        ctx,
+        CarryData{.type = CarryType::Block, .block = cap->block, .blockEntity = cap->blockEntity},
+        Kind::Block,
+        "minecraft:chest"
+    );
 });
 
 LO_REGISTER_SELFTEST("firstperson.furnace", [](Context& ctx) -> ll::coro::CoroTask<> {
@@ -166,8 +174,12 @@ LO_REGISTER_SELFTEST("firstperson.furnace", [](Context& ctx) -> ll::coro::CoroTa
     co_await ctx.ticks(1);
     auto cap = carry::captureBlock(ctx.player().getDimensionBlockSource(), lo::game::blockPos(pos));
     ctx.require(cap.has_value(), "furnace captured");
-    co_await showCarry(ctx, CarryData{.type = CarryType::Block, .block = cap->block, .blockEntity = cap->blockEntity},
-                       Kind::Block, "minecraft:furnace");
+    co_await showCarry(
+        ctx,
+        CarryData{.type = CarryType::Block, .block = cap->block, .blockEntity = cap->blockEntity},
+        Kind::Block,
+        "minecraft:furnace"
+    );
 });
 
 LO_REGISTER_SELFTEST("firstperson.pig", [](Context& ctx) -> ll::coro::CoroTask<> {
@@ -179,8 +191,15 @@ LO_REGISTER_SELFTEST("firstperson.pig", [](Context& ctx) -> ll::coro::CoroTask<>
     ctx.require(co_await ctx.ensureLoaded(pos), "test area loaded");
     auto  level  = ll::service::getLevel();
     auto& region = ctx.player().getDimensionBlockSource();
-    auto* pig    = level->getSpawner().spawnMob(region, ActorDefinitionIdentifier("minecraft:pig"), nullptr,
-                                                lo::game::blockPos(pos).bottomCenter(), false, false, false);
+    auto* pig    = level->getSpawner().spawnMob(
+        region,
+        ActorDefinitionIdentifier("minecraft:pig"),
+        nullptr,
+        lo::game::blockPos(pos).bottomCenter(),
+        false,
+        false,
+        false
+    );
     ctx.require(pig != nullptr, "a pig spawned");
     pig->setNameTag("lo_fp_pig");
     co_await ctx.ticks(2);
