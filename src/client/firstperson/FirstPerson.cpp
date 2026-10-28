@@ -7,7 +7,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <random>
 #include <vector>
 
 #include "glm/gtc/constants.hpp"
@@ -32,6 +31,7 @@
 #include "mc/deps/core/math/Vec3.h"
 #include "mc/deps/ecs/gamerefs_entity/GameRefsEntity.h"
 #include "mc/deps/ecs/gamerefs_entity/OwnerStorageEntity.h"
+#include "mc/deps/ecs/WeakEntityRef.h"
 #include "mc/deps/nbt/CompoundTag.h"
 #include "mc/deps/nbt/ListTag.h"
 #include "mc/deps/renderer/Camera.h"
@@ -133,7 +133,7 @@ struct Cache {
     CarryVisual              visual; ///< its visual
     bool                     chest = false;
     ItemStack                item;           ///< block / item visual
-    OwnerStorageEntity       entity;         ///< entity visual: a client-only actor (not in the level)
+    std::optional<WeakEntityRef> entity;     ///< entity visual: a client-only display actor of the level
     Level*                   level = nullptr; ///< the level the actor belongs to
     int                      dimension = -1;  ///< the dimension the actor was built in
     bool                     logged = false;
@@ -163,7 +163,14 @@ void setStatus(DrawStatus::Kind kind, std::string what, bool count) {
 Actor* cachedActor() {
     auto& c = cache();
     if (!c.entity.has_value()) return nullptr;
-    return Actor::tryGetFromEntity(*c.entity, true);
+    return c.entity->tryUnwrap<Actor>().as_ptr();
+}
+
+/// Where the display actor waits between frames: above the build limit, out of sight (the level
+/// renderer draws display actors too); it is moved to the player only while we draw it.
+Vec3 parkPos(LocalPlayer& player) {
+    auto const& p = player.getPosition();
+    return Vec3{p.x, static_cast<float>(player.getDimension().mHeightRange->mMax + 256), p.z};
 }
 
 /// Releases the display actor. `levelAlive`: the level that owns it still exists (else it is
@@ -171,11 +178,7 @@ Actor* cachedActor() {
 void releaseActor(bool levelAlive) {
     auto& c = cache();
     if (c.entity.has_value()) {
-        if (levelAlive && c.level) {
-            try {
-                c.level->mActorGarbageCollector->garbageCollectEntity(std::move(c.entity));
-            } catch (...) {}
-        }
+        if (levelAlive && c.level && cachedActor()) c.level->removeDisplayEntity(*c.entity);
         c.entity.reset();
     }
     c.level     = nullptr;
@@ -193,56 +196,29 @@ void resetCache(bool levelAlive) {
     setStatus(DrawStatus::Kind::None, {}, false);
 }
 
-std::int64_t randomUniqueId() {
-    static std::mt19937_64 rng{std::random_device{}()};
-    // Negative ids are never handed out by the server.
-    return -static_cast<std::int64_t>((rng() >> 2) | 1);
-}
 
-/// A client-only actor built from the carried NBT, not added to the level (it never ticks and is
-/// drawn only by us). Rotations zeroed, hurt time 0, no name tag, no leash (SPEC §4.1).
+/// A client-only display actor of the carried type (SPEC §4.1): rotations zeroed, hurt time 0, no
+/// name tag, no leash. It waits above the build limit and is drawn only by us.
 void buildActor(LocalPlayer& player, std::string const& snbt) {
     auto& c     = cache();
     auto* level = currentClient() ? currentClient()->getLevel() : nullptr;
     if (!level) return;
-    auto tag = carry::parseNbt(snbt);
-    if (!tag) return;
-    auto const& pos       = player.getPosition();
-    (*tag)["Pos"]         = ListTag{pos.x, pos.y, pos.z};
-    (*tag)["Rotation"]    = ListTag{0.f, 0.f};
-    (*tag)["Motion"]      = ListTag{0.f, 0.f, 0.f};
-    (*tag)["UniqueID"]    = randomUniqueId();
-    (*tag)["HurtTime"]    = short{0};
-    (*tag)["CustomName"]  = std::string{};
-    (*tag)["CustomNameVisible"] = false;
-    for (auto key : {"LinksTag", "Leasher", "LeasherID", "Persistent"}) tag->erase(key);
-    DefaultDataLoadHelper helper;
-    char const* path  = "load";
-    auto        owner = level->getActorFactory().loadActor(&*tag, helper, player.getDimension().mHeightRange, nullptr);
-    if (owner) {
-        c.entity.emplace(*owner); // EntityContext is a handle (registry + id); no game-side copy
-    } else {
-        path         = "display";
-        auto display = level->getActorFactory().clientCreateDisplayActor(
-            ActorDefinitionIdentifier(carry::entityIdOf(snbt)), &player, pos, Vec2{0.f, 0.f}
-        );
-        if (display) c.entity.emplace(*display);
+    auto id = carry::entityIdOf(snbt);
+    if (id.empty()) return;
+    auto owner = level->getActorFactory().clientCreateDisplayActor(
+        ActorDefinitionIdentifier(id), &player, parkPos(player), Vec2{0.f, 0.f}
+    );
+    if (!owner) {
+        log().warn("firstperson: cannot create a display actor for {}", id);
+        return;
     }
-    log().info("firstperson: actor via {}: owner={}", path, c.entity.has_value());
-    if (!c.entity) return;
+    WeakEntityRef weak = owner->getWeakRef();
+    auto*         actor = level->addDisplayEntity(player.getDimensionBlockSource(), std::move(owner));
+    if (!actor) return;
+    c.entity    = weak;
     c.level     = level;
     c.dimension = static_cast<int>(player.getDimensionId());
-    auto* actor = cachedActor();
-    log().info("firstperson: actor ptr {}", (void*)actor);
-    if (actor) {
-        if (path[0] == 'l') actor->setDimension(player.mDimension);
-        log().info("firstperson: actor dim ok");
-        actor->setNameTag("");
-        log().info("firstperson: actor ok");
-    } else {
-        log().info("firstperson: actor missing");
-        releaseActor(true);
-    }
+    actor->setNameTag("");
 }
 
 void rebuild(CarryData const& data, LocalPlayer& player) {
@@ -350,12 +326,14 @@ bool renderCarried(ItemInHandRenderer& self, BaseActorRenderContext& ctx, Matrix
         if (!actor) break;
         auto const& ppos = player->getPosition();
         actor->_setPos(ppos);
+        actor->setRotationWrapped(Vec2{0.f, 0.f});
         float h  = carry::entityHeight(*actor);
         float w  = carry::entityWidth(*actor);
         auto ref = cam.worldMatrixStack->push(false);
         auto& m  = *ref.mat->_m;
         m        = m * base * entityTransform(h, w, s.rotateEntitiesSideways, c.visual);
         ctx.mEntityRenderDispatcher->render(ctx, *actor, ppos, ppos, Vec2{0.f, 0.f}, false);
+        actor->_setPos(parkPos(*player));
         setStatus(DrawStatus::Kind::Entity, describe(c), true);
         break;
     }
