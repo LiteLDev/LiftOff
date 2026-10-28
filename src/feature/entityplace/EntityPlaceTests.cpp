@@ -32,6 +32,7 @@
 #include "feature/carry/CarryConfig.h"
 #include "feature/carry/CarryData.h"
 #include "feature/carry/CarryStore.h"
+#include "feature/carry/Hooks.h"
 #include "feature/carry/Lists.h"
 #include "feature/carry/Slowness.h"
 #include "feature/entityplace/EntityPlace.h"
@@ -92,6 +93,13 @@ void removeActor(std::int64_t id) {
         a->remove();
     }
 }
+
+/// A protection hook that vetoes entity placement while a test asks for it.
+bool gVetoPlacement = false;
+LO_REGISTER_PICKUP_HOOKS(lo::feature::carry::PickupHooks{
+    .name            = "entityplace-selftest",
+    .placeProtection = [](lo::feature::carry::PlaceTarget const& t) { return !(gVetoPlacement && t.data.isEntity()); },
+});
 
 /// Restores the carry config after a test changed it.
 struct ConfigGuard {
@@ -399,4 +407,23 @@ LO_REGISTER_SELFTEST("entityplace.ride_emulated", [](Context& ctx) -> ll::coro::
     ctx.check(ep::vehicleOf(*rider) == nullptr, "and rides nothing");
     removeActor(riderId);
     removeActor(vehicleId);
+});
+
+// A protection hook vetoes the placement of a mob: nothing happens, the carry is kept.
+LO_REGISTER_SELFTEST("entityplace.place_protected", [](Context& ctx) -> ll::coro::CoroTask<> {
+    auto&    p    = ctx.player();
+    BlockPos base = lo::game::blockPos(ctx.testPos(490));
+    ctx.require(co_await prepare(ctx, base), "test area ready");
+    BlockPos floor = offset(base, 2, -1, 0);
+    auto     uid   = carryMob(p, "minecraft:pig", offset(base, 3, 0, 1), "lo_ep_protected");
+    ctx.require(uid != 0, "carrying a pig");
+    co_await ctx.ticks(2);
+    gVetoPlacement = true;
+    bool placed    = ep::tryPlaceEntity(p, floor, 1);
+    gVetoPlacement = false;
+    ctx.check(!placed, "the protection hook vetoes the placement");
+    ctx.check(carry::get(p).isEntity(), "the carry is kept");
+    ctx.check(fetch(uid) == nullptr, "no pig appeared");
+    ctx.check(ep::tryPlaceEntity(p, floor, 1), "placed once the hook agrees");
+    removeActor(uid);
 });

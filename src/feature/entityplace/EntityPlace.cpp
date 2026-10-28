@@ -25,6 +25,7 @@
 #include "mc/platform/UUID.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorFactory.h"
+#include "mc/world/actor/ActorType.h"
 #include "mc/world/actor/player/Player.h"
 #include "mc/world/gamemode/GameMode.h"
 #include "mc/world/item/HandSlot.h"
@@ -42,6 +43,7 @@
 #include "feature/carry/Lists.h"
 #include "feature/carry/Slowness.h"
 #include "game/Blocks.h"
+#include "game/WorldDb.h"
 #include "mod/Config.h"
 #include "mod/Log.h"
 #include "mod/Module.h"
@@ -210,12 +212,23 @@ bool tryPlaceEntity(Player& carrier, BlockPos const& clicked, int face) {
     }
     // 2. Bottom centre, no collision check.
     Vec3 const pos = target.bottomCenter();
-    // 4. Protection (hooks only; no built-in event for entities), commandPlace, spawn.
-    if (!carry::placeAllowed(carry::PlaceTarget{carrier, region, target, data, face}, false)) return false;
-    carry::runOnPlace(carrier, data);
-    Actor* actor = carry::spawnActor(region, pos, data.entity);
-    if (!actor) {
+    // 4. Recreated from the NBT (UniqueID kept), protection (mobs only; hooks, no built-in event),
+    //    commandPlace, added to the world.
+    std::optional<OwnerPtr<EntityContext>> detached;
+    detached.emplace(loadDetached(region, pos, data.entity));
+    Actor* created = detached->tryUnwrap<Actor, true>().as_ptr();
+    if (!created) {
         log().warn("carry: could not recreate the carried entity of {}; it stays carried", carrier.getRealName());
+        return false;
+    }
+    if (created->hasType(ActorType::Mob)
+        && !carry::placeAllowed(carry::PlaceTarget{carrier, region, target, data, face}, false))
+        return false;
+    carry::runOnPlace(carrier, data);
+    auto   level = ll::service::getLevel();
+    Actor* actor = level ? level->addEntity(region, std::move(*detached)) : nullptr;
+    if (!actor) {
+        log().warn("carry: could not add the carried entity of {}; it stays carried", carrier.getRealName());
         return false;
     }
     carry::playAmbient(*actor);
@@ -240,6 +253,12 @@ std::vector<PendingPlace>& pending() {
     static std::vector<PendingPlace> v;
     return v;
 }
+
+// A queued placement never survives its world (the client loads many worlds in one process).
+[[maybe_unused]] bool const kWorldListener = [] {
+    game::db::onWorldClosed([] { pending().clear(); });
+    return true;
+}();
 
 void runPending() {
     if (pending().empty()) return;

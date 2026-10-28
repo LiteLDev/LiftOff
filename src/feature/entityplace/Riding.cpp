@@ -9,6 +9,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -25,6 +27,8 @@
 #include "mc/entity/components_json_legacy/RideableComponent.h"
 #include "mc/legacy/ActorUniqueID.h"
 #include "mc/world/actor/Actor.h"
+#include "mc/world/level/BlockPos.h"
+#include "mc/world/level/BlockSource.h"
 #include "mc/world/level/Level.h"
 
 #include "feature/carry/Capture.h"
@@ -40,12 +44,13 @@ namespace lo::feature::entityplace {
 
 namespace {
 constexpr char const* kDbKey = "lo:entityplace:rides";
-/// A rider farther than this from its seat was moved away (teleport, knockback by a command, ...).
+/// A rider farther than this from where it was put last tick was moved away (teleport, ...).
 constexpr float kMaxSeatDistance = 4.0f;
 
 struct Link {
-    std::int64_t rider;
-    std::int64_t vehicle;
+    std::int64_t        rider;
+    std::int64_t        vehicle;
+    std::optional<Vec3> lastSeat{}; ///< where the rider was put last tick (not persisted)
 };
 
 std::vector<Link>& links() {
@@ -114,36 +119,49 @@ int depthOf(std::unordered_map<std::int64_t, std::int64_t> const& vehicleOfRider
     return depth;
 }
 
+/// The vehicle of a loaded rider cannot be fetched: gone for good, unless it may just be in a chunk
+/// that is not loaded (it is always within a few blocks of its rider).
+bool vehicleMayBeUnloaded(Actor const& rider) {
+    auto& region = rider.getDimensionBlockSource();
+    return !region.hasChunksAt(rider.getFeetBlockPos(), static_cast<int>(kMaxSeatDistance) + 2, false);
+}
+
 void tickLinks() {
     auto& v = links();
     if (v.empty()) return;
     std::unordered_map<std::int64_t, std::int64_t> vehicleOfRider;
     for (auto const& l : v) vehicleOfRider[l.rider] = l.vehicle;
-    std::vector<Link> order = v;
-    std::stable_sort(order.begin(), order.end(), [&](Link const& a, Link const& b) {
-        return depthOf(vehicleOfRider, a.rider) < depthOf(vehicleOfRider, b.rider);
-    });
+    std::vector<std::pair<int, std::int64_t>> order; // (depth, rider)
+    order.reserve(v.size());
+    for (auto const& l : v) order.emplace_back(depthOf(vehicleOfRider, l.rider), l.rider);
+    std::stable_sort(order.begin(), order.end(), [](auto const& a, auto const& b) { return a.first < b.first; });
 
     bool changed = false;
-    for (auto const& l : order) {
+    for (auto const& [depth, riderId] : order) {
+        auto it = std::find_if(v.begin(), v.end(), [id = riderId](Link const& l) { return l.rider == id; });
+        if (it == v.end()) continue;
+        Link&  l     = *it;
         Actor* rider = fetch(l.rider);
-        if (!rider) continue; // unloaded: keep the link until it is loaded again
-        Actor* vehicle = fetch(l.vehicle);
-        bool   drop    = !vehicle || !vehicle->isAlive() || !rider->isAlive()
-                    || vehicle->getDimensionId() != rider->getDimensionId() || rider->getVehicle() != nullptr;
-        Vec3 seat;
-        if (!drop) {
-            seat = seatOf(*vehicle);
-            drop = rider->getPosition().distanceTo(seat) > kMaxSeatDistance;
+        if (!rider) { // unloaded (or carried: see the carry listener): keep the link until it is back
+            l.lastSeat.reset();
+            continue;
         }
+        Actor* vehicle = fetch(l.vehicle);
+        if (!vehicle && vehicleMayBeUnloaded(*rider)) continue;
+        bool drop = !vehicle || !vehicle->isAlive() || !rider->isAlive()
+                 || vehicle->getDimensionId() != rider->getDimensionId() || rider->getVehicle() != nullptr;
+        // The rider was moved away from where it was put last tick (teleport): it dismounts.
+        if (!drop && l.lastSeat) drop = rider->getPosition().distanceTo(*l.lastSeat) > kMaxSeatDistance;
         if (drop) {
-            std::erase_if(v, [&](Link const& x) { return x.rider == l.rider && x.vehicle == l.vehicle; });
+            v.erase(it);
             changed = true;
             continue;
         }
+        Vec3 seat = seatOf(*vehicle);
         rider->moveTo(seat, rider->getRotation());
         const_cast<Vec3&>(rider->getPosDelta()) = Vec3{0.f, 0.f, 0.f};
         rider->setFallDistance(0.f);
+        l.lastSeat = seat;
     }
     if (changed) persist();
 }

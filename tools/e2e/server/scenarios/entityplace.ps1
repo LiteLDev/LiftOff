@@ -2,4 +2,4 @@
 # through the real use-block / entity-interact paths of SimulatedPlayers.
 $r = Invoke-SelfTest 'entityplace.*'
 if ($r.Fail -gt 0) { throw "$($r.Fail) entityplace selftest(s) failed" }
-if ($r.Pass -lt 8) { throw "expected at least 8 entityplace selftests to pass, got $($r.Pass)" }
+if ($r.Pass -lt 10) { throw "expected at least 10 entityplace selftests to pass, got $($r.Pass)" }
