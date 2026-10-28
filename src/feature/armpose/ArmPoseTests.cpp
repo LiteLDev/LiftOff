@@ -319,6 +319,8 @@ LO_REGISTER_SELFTEST("armpose.showcase", [](Context& ctx) -> ll::coro::CoroTask<
     auto pos    = ctx.testPos(1390);
     ctx.require(co_await ctx.ensureLoaded(pos), "test area loaded");
     BlockPos base = lo::game::blockPos(pos);
+    // ensureLoaded parked the test player here: move it out of the pictures (behind the camera).
+    ctx.player().teleport(Vec3{base.x + 0.5f, static_cast<float>(base.y), base.z - 8.5f}, real->getDimensionId());
     real->teleport(Vec3{base.x + 0.5f, static_cast<float>(base.y), base.z + 0.5f}, real->getDimensionId(), Vec2{10.0f, 0.0f});
 
     auto& level  = *ll::service::getLevel();
