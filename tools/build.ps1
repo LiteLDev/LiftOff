@@ -42,10 +42,10 @@ try {
     $targets = if ($Target -eq 'all') { @('server', 'client') } else { @($Target) }
     foreach ($t in $targets) {
         Write-Host "==> configuring $t ($Mode)"
-        xmake f -a x64 -m $Mode -p windows --target_type=$t -o "build/$t" @vsArgs -y
+        xmake f -P "$root" -a x64 -m $Mode -p windows --target_type=$t -o "build/$t" @vsArgs -y
         if ($LASTEXITCODE) { throw "xmake config failed for $t" }
         Write-Host "==> building $t"
-        xmake build -y LiftOff
+        xmake build -P "$root" -y LiftOff
         if ($LASTEXITCODE) { throw "build failed for $t" }
         $out = Join-Path $root "bin/$t/LiftOff"
         if (-not (Test-Path (Join-Path $out 'LiftOff.dll'))) { throw "missing output $out" }
@@ -53,9 +53,9 @@ try {
     }
     if ($Tests) {
         Write-Host '==> unit tests'
-        xmake build -y lo-tests
+        xmake build -P "$root" -y lo-tests
         if ($LASTEXITCODE) { throw 'lo-tests build failed' }
-        xmake run lo-tests
+        xmake run -P "$root" lo-tests
         if ($LASTEXITCODE) { throw 'unit tests failed' }
     }
 } finally {
