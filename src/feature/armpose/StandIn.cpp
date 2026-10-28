@@ -15,6 +15,7 @@
 #include "mc/deps/ecs/gamerefs_entity/GameRefsEntity.h"
 #include "mc/deps/ecs/gamerefs_entity/OwnerStorageEntity.h"
 #include "mc/deps/nbt/CompoundTag.h"
+#include "mc/deps/nbt/ByteTag.h"
 #include "mc/deps/nbt/ListTag.h"
 #include "mc/legacy/ActorRuntimeID.h"
 #include "mc/legacy/ActorUniqueID.h"
@@ -202,6 +203,54 @@ schar angleByte(float degrees) {
 }
 } // namespace
 
+namespace {
+/// Collision widths / heights of vanilla mobs (Bedrock behavior pack values). A remote client has no
+/// behavior definitions, so it cannot measure a temporary actor; it uses these instead.
+EntityBox fallbackBox(std::string_view snbt) {
+    struct Size {
+        char const* id;
+        float       w, h;
+    };
+    static constexpr Size kSizes[] = {
+        {"minecraft:pig", 0.9f, 0.9f},           {"minecraft:cow", 0.9f, 1.3f},
+        {"minecraft:mooshroom", 0.9f, 1.3f},     {"minecraft:sheep", 0.9f, 1.3f},
+        {"minecraft:chicken", 0.6f, 0.8f},       {"minecraft:wolf", 0.6f, 0.8f},
+        {"minecraft:cat", 0.6f, 0.7f},           {"minecraft:ocelot", 0.6f, 0.7f},
+        {"minecraft:fox", 0.6f, 0.7f},           {"minecraft:rabbit", 0.67f, 0.67f},
+        {"minecraft:horse", 1.4f, 1.6f},         {"minecraft:donkey", 1.4f, 1.6f},
+        {"minecraft:mule", 1.4f, 1.6f},          {"minecraft:llama", 0.9f, 1.87f},
+        {"minecraft:trader_llama", 0.9f, 1.87f}, {"minecraft:goat", 0.9f, 1.3f},
+        {"minecraft:bee", 0.55f, 0.5f},          {"minecraft:parrot", 0.5f, 1.0f},
+        {"minecraft:turtle", 1.2f, 0.4f},        {"minecraft:axolotl", 0.75f, 0.42f},
+        {"minecraft:frog", 0.5f, 0.55f},         {"minecraft:armadillo", 0.7f, 0.65f},
+        {"minecraft:bat", 0.5f, 0.9f},           {"minecraft:allay", 0.35f, 0.6f},
+        {"minecraft:villager_v2", 0.6f, 1.9f},   {"minecraft:wandering_trader", 0.6f, 1.9f},
+        {"minecraft:snow_golem", 0.4f, 1.8f},    {"minecraft:iron_golem", 1.4f, 2.9f},
+        {"minecraft:squid", 0.95f, 0.95f},       {"minecraft:glow_squid", 0.95f, 0.95f},
+        {"minecraft:dolphin", 0.9f, 0.6f},       {"minecraft:cod", 0.5f, 0.3f},
+        {"minecraft:salmon", 0.5f, 0.5f},        {"minecraft:pufferfish", 0.8f, 0.8f},
+        {"minecraft:tropicalfish", 0.4f, 0.4f},  {"minecraft:strider", 0.9f, 1.7f},
+        {"minecraft:polar_bear", 1.3f, 1.4f},    {"minecraft:panda", 1.7f, 1.5f},
+        {"minecraft:camel", 1.7f, 2.375f},       {"minecraft:sniffer", 1.9f, 1.75f},
+    };
+    EntityBox b;
+    auto      tag = carry::parseNbt(snbt);
+    b.type        = carry::entityIdOf(snbt);
+    for (auto const& s : kSizes) {
+        if (b.type == s.id) {
+            b.width  = s.w;
+            b.height = s.h;
+            break;
+        }
+    }
+    if (tag && tag->contains("IsBaby") && (*tag)["IsBaby"].get<ByteTag>().data != 0) {
+        b.width  *= 0.5f;
+        b.height *= 0.5f;
+    }
+    return b;
+}
+} // namespace
+
 EntityBox entityBox(std::string_view snbt, Level* level) {
     // Small LRU per thread (server thread / client thread): carries rarely change, but every
     // selftest / viewer asks again.
@@ -214,7 +263,7 @@ EntityBox entityBox(std::string_view snbt, Level* level) {
     }
     EntityBox box;
     withTempActor(snbt, level, [&](Actor& actor) { box = boxOf(actor); });
-    if (!box.ok) return box; // not cached: the level may not be ready yet
+    if (!box.ok) return fallbackBox(snbt); // not cached: the level may not be ready yet
     cache.emplace_front(std::string(snbt), box);
     if (cache.size() > 16) cache.pop_back();
     return box;
