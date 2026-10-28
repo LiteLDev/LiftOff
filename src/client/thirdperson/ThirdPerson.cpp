@@ -301,7 +301,7 @@ void prune(State& s, Clock::time_point now) {
     if (now - s.lastPrune < std::chrono::seconds(1)) return;
     s.lastPrune = now;
     std::erase_if(s.entries, [&](auto const& kv) {
-        return now - kv.second.lastDraw > kOutOfView || !client::carry::carriedOf(kv.first);
+        return now - kv.second.lastDraw > kOutOfView || !client::carry::carriedCopy(kv.first);
     });
 }
 
@@ -312,7 +312,7 @@ void drawCarried(BaseActorRenderContext& ctx, Actor& carrier, Vec3 const& camera
     // The local player in first person: U10 draws the carry in the hands.
     if (ctx.mScreenContext.isDrawingFirstPersonObjects || (carrier.isLocalPlayer() && currentPerspective() == 0)) return;
     std::int64_t     id   = carrier.getOrCreateUniqueID().rawID;
-    CarryData const* data = client::carry::carriedOf(id);
+    std::optional<CarryData> data = client::carry::carriedCopy(id); // locked copy (packet thread)
 
     auto&            s   = state();
     auto             now = Clock::now();
