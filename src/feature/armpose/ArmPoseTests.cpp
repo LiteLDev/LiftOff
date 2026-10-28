@@ -228,12 +228,19 @@ LO_REGISTER_SELFTEST("armpose.modded_viewer", [](Context& ctx) -> ll::coro::Coro
 LO_REGISTER_SELFTEST("armpose.entity", [](Context& ctx) -> ll::coro::CoroTask<> {
     Player *carrier = nullptr, *viewer = nullptr;
     ctx.require(co_await setup(ctx, 1320, carrier, viewer), "test area loaded");
-    auto  level  = ll::service::getLevel();
-    auto& region = carrier->getDimensionBlockSource();
-    Vec3  at     = lo::game::blockPos(ctx.testPos(1325)).bottomCenter();
-    auto* pig    = level->getSpawner()
-                       .spawnMob(region, ActorDefinitionIdentifier("minecraft:pig"), nullptr, at, false, false, false);
-    ctx.require(pig != nullptr, "a pig spawned");
+    auto   level  = ll::service::getLevel();
+    auto&  region = carrier->getDimensionBlockSource();
+    Vec3   at     = lo::game::blockPos(ctx.testPos(1325)).bottomCenter();
+    Actor* pig    = nullptr;
+    for (int i = 0; i < 10 && !pig; ++i) { // spawned pigs are sometimes babies: keep an adult
+        pig = level->getSpawner()
+                  .spawnMob(region, ActorDefinitionIdentifier("minecraft:pig"), nullptr, at, false, false, false);
+        if (pig && pig->isBaby()) {
+            pig->remove();
+            pig = nullptr;
+        }
+    }
+    ctx.require(pig != nullptr, "an adult pig spawned");
     pig->setNameTag("lo_armpose_pig");
     co_await ctx.ticks(1);
     CarryData d;
@@ -242,9 +249,7 @@ LO_REGISTER_SELFTEST("armpose.entity", [](Context& ctx) -> ll::coro::CoroTask<> 
     carry::removeCapturedActor(*pig);
 
     auto box = armpose::entityBox(d.entity);
-    // Spawned pigs are sometimes babies (half size): compare with the measured box.
-    float size = box.scale < 0.75f ? 0.45f : 0.9f;
-    ctx.check(box.ok && near(box.width, size) && near(box.height, size), "pig box from its NBT (0.9 x 0.9, baby 0.45)");
+    ctx.check(box.ok && near(box.width, 0.9f) && near(box.height, 0.9f), "pig box from its NBT (0.9 x 0.9)");
     auto pose = armpose::poseFor(d);
     ctx.check(near(pose.right.rotation[0], -1.3f), "entity: x = -1.3");
     ctx.check(near(pose.right.rotation[1], (box.width * 0.9f - 1.0f) / 1.5f), "entity: offset from width * 0.9");
@@ -257,7 +262,7 @@ LO_REGISTER_SELFTEST("armpose.entity", [](Context& ctx) -> ll::coro::CoroTask<> 
     auto adds = ofKind(sent, "add");
     ctx.require(adds.size() == 1, "one stand-in");
     ctx.check(adds[0].name == "minecraft:pig", "the stand-in is a pig");
-    float want = box.scale * 0.6f * 1.666f * (10.0f - box.width * box.height) * 0.08f;
+    float want = 0.6f * 1.666f * (10.0f - 0.81f) * 0.08f;
     ctx.check(near(adds[0].detail.value("scale", 0.0f), want), "scaled like Carry On's third-person view");
     ctx.check(ofKind(sent, "equip").empty(), "an entity stand-in wears nothing");
     teardown(*carrier, *viewer);
