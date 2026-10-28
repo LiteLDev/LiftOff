@@ -113,6 +113,9 @@ State& state() {
 
 /// True while this thread draws a carried object (the display actor goes through the hooked dispatcher).
 thread_local bool tDrawing = false;
+/// The display actor being drawn and the world matrix it must get (see `GlobalAnimsHook`).
+thread_local Actor*    tEntityActor = nullptr;
+thread_local glm::mat4 tEntityMatrix{1.f};
 
 // ---- helpers -----------------------------------------------------------------------------------
 
@@ -138,8 +141,9 @@ bool isMob(Actor const& a) {
     return (static_cast<int>(a.getEntityTypeId()) & static_cast<int>(ActorType::Mob)) == static_cast<int>(ActorType::Mob);
 }
 
-float boxHeight(Actor const& a) { return carry::entityHeight(a); }
-float boxWidth(Actor const& a) { return carry::entityWidth(a); }
+// The collision box size (the box itself is not placed: the display actor is never added to the level).
+float boxHeight(Actor const& a) { return unwrap(a.mBuiltInComponents->mAABBShapeComponent->mBBDim).y; }
+float boxWidth(Actor const& a) { return unwrap(a.mBuiltInComponents->mAABBShapeComponent->mBBDim).x; }
 
 Block const* blockFromSnbt(std::string const& snbt) {
     auto tag = carry::parseNbt(snbt);
@@ -255,18 +259,16 @@ int currentPerspective() {
 }
 
 /// The carrier's pose this frame (Carry On reads the same from the player render state).
-CarrierPose poseOf(Actor& carrier, Vec3 const& renderPos, float alpha) {
+CarrierPose poseOf(Actor& carrier, Vec3 const& renderPos, Vec2 const& renderRot) {
     CarrierPose p;
     // `renderPos` is the actor position relative to the camera; a player's position is its eye.
     float feetOffset = carrier.getPosition().y - carrier.getAABB().min.y;
     p.feet           = {renderPos.x, renderPos.y - feetOffset, renderPos.z};
 
-    // Carry On: riding a player -> that player's body yaw; riding another mob -> the head yaw.
-    Actor* vehicle = carrier.getVehicle();
-    if (vehicle && vehicle->isPlayer()) p.bodyYaw = vehicle->getInterpolatedBodyRot(alpha);
-    else if (vehicle && isMob(*vehicle)) p.bodyYaw = carrier.getInterpolatedHeadRot(alpha);
-    else p.bodyYaw = carrier.getInterpolatedBodyRot(alpha);
-    p.pitch = carrier.getRotation().x;
+    // The rotation the player model is drawn with this frame (interpolated body yaw, pitch). Carry On
+    // follows the model's body (the vehicle's rules for riding are already applied by the renderer).
+    p.bodyYaw = renderRot.y;
+    p.pitch   = renderRot.x;
 
     bool flying = carrier.isPlayer() && static_cast<Player&>(carrier).isFlying();
     p.sneakCheck = carrier.isSneaking() && !flying;
@@ -304,7 +306,7 @@ void prune(State& s, Clock::time_point now) {
 }
 
 /// Draws `carrier`'s carry after the carrier itself was drawn.
-void drawCarried(BaseActorRenderContext& ctx, Actor& carrier, Vec3 const& cameraTarget, Vec3 const& renderPos, bool identityBase, Vec2 rdRot) {
+void drawCarried(BaseActorRenderContext& ctx, Actor& carrier, Vec3 const& cameraTarget, Vec3 const& renderPos, bool identityBase, Vec2 const& rdRot) {
     if (!carrier.isPlayer()) return;
     if (ctx.mIsRenderingOnMap || ctx.mScreenContext.isDrawingUI) return; // paper doll, maps
     // The local player in first person: U10 draws the carry in the hands.
@@ -322,23 +324,12 @@ void drawCarried(BaseActorRenderContext& ctx, Actor& carrier, Vec3 const& camera
     }
     auto [it, fresh] = s.entries.try_emplace(id);
     Entry& e         = it->second;
-    if (fresh || !sameCarried(e.data, *data)) {
-        build(e, *data, carrier);
-        log().info(
-            "thirdperson: yaw check body {:.1f} head {:.1f} rot {:.1f} render {:.1f} {:.1f}",
-            carrier.getInterpolatedBodyRot(ctx.getFrameAlpha(carrier)),
-            carrier.getInterpolatedHeadRot(ctx.getFrameAlpha(carrier)),
-            carrier.getRotation().y,
-            rdRot.x,
-            rdRot.y
-        );
-    }
+    if (fresh || !sameCarried(e.data, *data)) build(e, *data, carrier);
     e.lastDraw = now;
     if (e.broken) return;
 
     auto const& settings = config::get<carry::CarryClientConfig>().settings;
-    float       alpha    = ctx.getFrameAlpha(carrier);
-    CarrierPose pose     = poseOf(carrier, renderPos, alpha);
+    CarrierPose pose     = poseOf(carrier, renderPos, rdRot);
     Mat4        frame    = carrierFrame(pose);
 
     auto& camera = unwrap(ctx.mScreenContext.camera);
@@ -360,16 +351,26 @@ void drawCarried(BaseActorRenderContext& ctx, Actor& carrier, Vec3 const& camera
         actor->moveTo(carrier.getPosition(), Vec2{0.f, 0.f});
         if (isMob(*actor)) static_cast<Mob*>(actor)->setYBodyRotations(0.f, 0.f);
         {
-            auto ref            = identityBase ? stack.pushIdentity(false) : stack.push(false);
-            unwrap(ref.mat->_m) = unwrap(ref.mat->_m) * toGlm(m);
-            tDrawing         = true;
+            // The dispatcher does not take our matrix stack top; the ActorRenderData hook below sets the
+            // actor's world matrix (camera-relative, like the stack's identity) for this actor only.
+            auto feet = m.apply(0.f, 0.f, 0.f);
+            // Bedrock entity geometry faces -Z and is in model pixels (1/16 block); Carry On's entity faces +Z.
+            Mat4 world = m;
+            world.rotateY(180.f);
+            world.scale(1.f / 16.f);
+            tEntityActor  = actor;
+            tEntityMatrix = toGlm(world);
+            tDrawing       = true;
             try {
-                unwrap(ctx.mEntityRenderDispatcher)->render(ctx, *actor, cameraTarget, Vec3{0.f, 0.f, 0.f}, Vec2{0.f, 0.f}, false);
+                unwrap(ctx.mEntityRenderDispatcher)
+                    ->render(ctx, *actor, cameraTarget, Vec3{feet[0], feet[1], feet[2]}, Vec2{0.f, 0.f}, false);
             } catch (...) {
-                tDrawing = false;
+                tDrawing     = false;
+                tEntityActor = nullptr;
                 throw;
             }
-            tDrawing = false;
+            tDrawing     = false;
+            tEntityActor = nullptr;
         }
         auto c = m.apply(0.f, e.height / 2.f, 0.f);
         recordDraw(id, CarryVisual::Kind::Entity, true, {c[0] + cameraTarget.x, c[1] + cameraTarget.y, c[2] + cameraTarget.z});
@@ -386,6 +387,9 @@ void drawCarried(BaseActorRenderContext& ctx, Actor& carrier, Vec3 const& camera
         .backView     = currentPerspective() == 1,
     };
     Mat4 m = frame * blockTransform(pose, params);
+    // Bedrock block items are modelled facing south (+Z), like Java's chest item; Java's other block items
+    // face north. Turn them so the front ends where Carry On puts it (outward unless facePlayer).
+    if (e.visual.kind == CarryVisual::Kind::Block && !e.isChest) m.rotateY(180.f);
     {
         auto ref            = identityBase ? stack.pushIdentity(false) : stack.push(false);
         unwrap(ref.mat->_m) = unwrap(ref.mat->_m) * toGlm(m);
@@ -408,35 +412,6 @@ void drawCarried(BaseActorRenderContext& ctx, Actor& carrier, Vec3 const& camera
 // ---- hooks ---------------------------------------------------------------------------------------
 
 namespace {
-std::atomic<int> gDiag[1]{};
-
-void diagnose(int which, char const* name, BaseActorRenderContext& ctx, Actor& actor, Vec3 const& renderPos) {
-    if (gDiag[which]++ != 0) return;
-    auto const& cam = unwrap(unwrap(ctx.mImpl)->mCameraTargetPosition);
-    auto const& top = unwrap(unwrap(unwrap(ctx.mScreenContext.camera).worldMatrixStack).stack).back();
-    auto const& tm  = unwrap(top._m);
-    log().info(
-        "thirdperson: render path {} active (actor {} pos {:.2f} {:.2f} {:.2f}, aabb min y {:.2f}, render pos {:.2f} "
-        "{:.2f} {:.2f}, camera target {:.2f} {:.2f} {:.2f}, world top t {:.2f} {:.2f} {:.2f} d {:.2f})",
-        name,
-        actor.getTypeName(),
-        actor.getPosition().x,
-        actor.getPosition().y,
-        actor.getPosition().z,
-        actor.getAABB().min.y,
-        renderPos.x,
-        renderPos.y,
-        renderPos.z,
-        cam.x,
-        cam.y,
-        cam.z,
-        tm[3][0],
-        tm[3][1],
-        tm[3][2],
-        tm[0][0]
-    );
-}
-
 template <class F>
 void guarded(F&& fn) {
     try {
@@ -453,6 +428,20 @@ void guarded(F&& fn) {
 }
 } // namespace
 
+// The data-driven renderer finishes an actor's world matrix here; our display actor gets Carry On's.
+LL_TYPE_INSTANCE_HOOK(
+    GlobalAnimsHook,
+    ll::memory::HookPriority::Normal,
+    ActorRenderData,
+    &ActorRenderData::applyGlobalAnims,
+    void,
+    Matrix&                 worldMatrix,
+    BaseActorRenderContext& ctx
+) {
+    origin(worldMatrix, ctx);
+    // Our display actor is drawn with Carry On's transform instead of the matrix the renderer set up.
+    if (tEntityActor && unwrap(this->mActor) == tEntityActor) unwrap(worldMatrix._m) = tEntityMatrix;}
+
 LL_TYPE_INSTANCE_HOOK(
     HumanoidRenderHook,
     ll::memory::HookPriority::Normal,
@@ -468,7 +457,6 @@ LL_TYPE_INSTANCE_HOOK(
     Actor* actor = unwrap(rd.mActor);
     if (!actor || !actor->isPlayer()) return;
     guarded([&] {
-        diagnose(0, "humanoid", ctx, *actor, unwrap(rd.position));
                 // The render data holds the world position; the identity world matrix is camera-relative.
         Vec3 const& camera = unwrap(unwrap(ctx.mImpl)->mCameraTargetPosition);
         Vec3 const& pos    = unwrap(rd.position);
@@ -533,10 +521,12 @@ public:
             });
         }
         HumanoidRenderHook::hook();
+        GlobalAnimsHook::hook();
     }
 
     void uninstall() {
         HumanoidRenderHook::unhook();
+        GlobalAnimsHook::unhook();
         auto& bus = ll::event::EventBus::getInstance();
         for (auto& l : mListeners) bus.removeListener(l);
         mListeners.clear();
