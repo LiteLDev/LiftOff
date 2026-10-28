@@ -189,7 +189,7 @@ bool tryPickup(Player& carrier, Player& target) {
     carrier.removeAllPassengers(false, false);
     retargetSeats(carrier);
     if (!target.startRiding(carrier, /*force*/ true)) {
-        restoreSeats(carrier);
+        restoreSeats(carrier); // the change listener only sees completed carries
         log().warn("carry: {} could not mount {}", target.getRealName(), carrier.getRealName());
         return false;
     }
@@ -204,24 +204,28 @@ bool tryPickup(Player& carrier, Player& target) {
 
 // ---- release ------------------------------------------------------------------------------------
 
+namespace {
+
+/// Ends a player carry: the rider leaves the carrier (start_riding_other(false) to modded clients),
+/// carry cleared, Slowness removed. The seats come back through the carry change listener.
+void endCarry(Player& carrier, Player* rider) {
+    if (rider && rider->isRiding(&carrier)) carrier.removeAllPassengers(false, false);
+    if (rider) net::broadcastStartRidingOther(carrier, *rider, false);
+    carry::clear(carrier);
+    carry::removeSlowness(carrier);
+}
+
+std::string nameOf(Player* rider, CarryData const& data) { return rider ? rider->getRealName() : data.player; }
+
+} // namespace
+
 void release(Player& carrier, std::string const& reason) {
     auto data = carry::get(carrier);
     if (!data.isPlayer()) return;
     Player* rider = playerByUuid(data.player);
-    if (rider && rider->isRiding(&carrier)) {
-        carrier.removeAllPassengers(false, false);
-        net::broadcastStartRidingOther(carrier, *rider, false);
-    }
+    endCarry(carrier, rider);
     if (rider) net::sendStartRiding(carrier, *rider, false);
-    carry::clear(carrier);
-    carry::removeSlowness(carrier);
-    restoreSeats(carrier);
-    log().info(
-        "carry: {} released player {} ({})",
-        carrier.getRealName(),
-        rider ? rider->getRealName() : data.player,
-        reason
-    );
+    log().info("carry: {} released player {} ({})", carrier.getRealName(), nameOf(rider, data), reason);
 }
 
 // ---- placement (§3.7 step 3) ----------------------------------------------------------------------
@@ -242,20 +246,11 @@ bool tryPlace(Player& carrier, BlockPos const& clicked, int face) {
     }
     Vec3    pos{static_cast<float>(target.x) + 0.5f, static_cast<float>(target.y), static_cast<float>(target.z) + 0.5f};
     Player* rider = playerByUuid(data.player);
-    carrier.removeAllPassengers(false, false);
-    if (rider) net::broadcastStartRidingOther(carrier, *rider, false);
-    carry::clear(carrier);
-    restoreSeats(carrier);
+    endCarry(carrier, rider);
     if (rider) rider->teleport(pos, carrier.getDimensionId());
     carry::swing(carrier);
-    carry::removeSlowness(carrier);
-    log().info(
-        "carry: {} placed player {} at {}",
-        carrier.getRealName(),
-        rider ? rider->getRealName() : data.player,
-        blockText(target)
-    );
-    log().info("carry: {} released player {} (placed)", carrier.getRealName(), rider ? rider->getRealName() : data.player);
+    log().info("carry: {} placed player {} at {}", carrier.getRealName(), nameOf(rider, data), blockText(target));
+    log().info("carry: {} released player {} (placed)", carrier.getRealName(), nameOf(rider, data));
     return true;
 }
 
@@ -299,16 +294,13 @@ bool tryStack(Player& carrier, Actor& clicked) {
     if (top->getTypeName() == "minecraft:horse") {
         SynchedActorDataAccess::setActorFlag(top->getEntityContext(), ActorFlags::Tamed, true);
     }
-    // 7: off the carrier and next to the clicked entity (Java spawns it 2.6 above and then moves it
-    // onto the entity when near; for a player both end at the clicked entity's position).
+    // 7: off the carrier and onto the clicked entity's position (Java spawns it 2.6 above and then
+    // moves it there when near; for a player both end at the clicked entity's position).
     carrier.removeAllPassengers(false, false);
     net::broadcastStartRidingOther(carrier, *held, false);
-    restoreSeats(carrier);
-    auto* rider = held->isPlayer() ? static_cast<Player*>(held) : nullptr;
-    if (rider) rider->teleport(clicked.getFeetPos(), clicked.getDimensionId());
-    // 8: rides the top entity (not forced); a refusal leaves it standing there.
-    // Java lets a player ride any entity that has room; Bedrock only entities with seats for players,
-    // so a refused normal ride is forced [LO].
+    if (held->isPlayer()) static_cast<Player*>(held)->teleport(clicked.getFeetPos(), clicked.getDimensionId());
+    // 8: rides the top entity. Java lets a player ride any entity that has room; Bedrock only
+    // entities with seats for players, so a refused normal ride is forced [LO].
     bool rode = held->startRiding(*top, /*force*/ false) || held->startRiding(*top, /*force*/ true);
     // 9.
     carry::runOnPlace(carrier, data);
@@ -330,13 +322,12 @@ bool tryStack(Player& carrier, Actor& clicked) {
 
 namespace {
 
-void tickCarrier(Player& carrier, CarryData const& data) {
-    Player* rider = playerByUuid(data.player);
+void tickCarrier(Player& carrier, std::string const& riderUuid) {
+    Player* rider = playerByUuid(riderUuid);
     if (!rider) {
-        // Carried player left the server (normally handled by the disconnect listener).
+        // The carried player is gone (normally handled by the disconnect listener first).
         carry::placeCarried(carrier);
-        restoreSeats(carrier);
-        log().info("carry: {} released player {} (left)", carrier.getRealName(), data.player);
+        log().info("carry: {} released player {} (left)", carrier.getRealName(), riderUuid);
         return;
     }
     if (!rider->isRiding(&carrier)) {
@@ -345,16 +336,16 @@ void tickCarrier(Player& carrier, CarryData const& data) {
         release(carrier, "dismounted");
         return;
     }
-    // The seats are per entity and come back from the definition on respawn / reload.
+    // The seats are per entity and come back from the definition on respawn: keep them targeted.
     retargetSeats(carrier);
-    // Body yaw = carrier yaw; head yaw within ±30° of it (the seat lock does it on clients).
-    float yaw  = carrier.getRotation().y;
-    float head = rider->getRotation().y;
-    float diff = std::clamp(wrapDegrees(head - yaw), -kYawLimitDeg, kYawLimitDeg);
-    if (std::abs(wrapDegrees(head - yaw)) > kYawLimitDeg) {
-        // Server side only (SimulatedPlayers, other riders); a client's own view is held by the seat lock.
-        const_cast<Vec2&>(rider->getRotation()).y = wrapDegrees(yaw + diff);
-        rider->setYHeadRot(wrapDegrees(yaw + diff));
+    // Body yaw = the carrier's body yaw; head yaw within ±30° of it. Server side (SimulatedPlayers,
+    // what other players are sent); a client's own view is held by the seat lock.
+    float yaw = carrier.getYBodyRotation();
+    float off = wrapDegrees(rider->getRotation().y - yaw);
+    if (std::abs(off) > kYawLimitDeg) {
+        float clamped                             = wrapDegrees(yaw + std::clamp(off, -kYawLimitDeg, kYawLimitDeg));
+        const_cast<Vec2&>(rider->getRotation()).y = clamped;
+        rider->setYHeadRot(clamped);
     }
     rider->setYBodyRotation(yaw);
 }
@@ -374,6 +365,8 @@ LL_TYPE_INSTANCE_HOOK(
     HandSlot    handSlot
 ) {
     Player& player = mPlayer;
+    // Client builds run GameMode for the local player too: only the server decides.
+    if (player.isClientSide()) return origin(entity, location, handSlot);
     try {
         auto const& data = carry::get(player);
         if (data.isPlayer()) {
@@ -391,53 +384,57 @@ LL_TYPE_INSTANCE_HOOK(
 class PlayerCarryModule {
 public:
     void install() {
+        static bool listening = false;
+        if (!listening) {
+            listening = true;
+            // Whatever ends a player carry (this unit, `/carryon clear`, death placement, ...): the
+            // carrier's seats come back.
+            carry::onCarryChanged([](Player& player, CarryData const& oldData, CarryData const& newData) {
+                if (oldData.isPlayer() && !newData.isPlayer()) restoreSeats(player);
+            });
+        }
         PlayerCarryInteractHook::hook();
         auto& bus = ll::event::EventBus::getInstance();
         mListeners.push_back(bus.emplaceListener<ll::event::ServerLevelTickEvent>([](auto&) {
-            std::vector<std::pair<Player*, CarryData>> carriers;
+            // Deferred placements first (their tick guard was checked at the click).
+            for (auto& p : std::exchange(pending(), {})) {
+                if (auto* carrier = playerByUuid(p.carrier)) tryPlace(*carrier, p.clicked, p.face);
+            }
+            std::vector<std::pair<Player*, std::string>> carriers;
             carry::forEachCarrier([&](Player& p, CarryData const& d) {
-                if (d.isPlayer()) carriers.emplace_back(&p, d);
+                if (d.isPlayer()) carriers.emplace_back(&p, d.player);
             });
-            for (auto& [p, d] : carriers) {
+            for (auto& [p, rider] : carriers) {
                 try {
-                    tickCarrier(*p, d);
+                    tickCarrier(*p, rider);
                 } catch (std::exception const& e) {
                     log().error("playercarry: tick failed: {}", e.what());
                 }
             }
         }));
-        // Use-block while carrying a player: put the player down (next tick: a cancelled
+        // Use-block while carrying a player: put the player down on the next tick (a cancelled
         // interaction rolls back world changes).
         mListeners.push_back(bus.emplaceListener<ll::event::PlayerInteractBlockEvent>(
             [](ll::event::PlayerInteractBlockEvent& ev) {
                 auto& player = ev.self();
-                if (!carry::get(player).isPlayer()) return;
+                if (player.isClientSide() || !carry::get(player).isPlayer()) return;
                 ev.cancel();
                 if (!carry::canAct(player)) return;
-                auto uuid    = uuidOf(player);
-                auto clicked = ev.blockPos();
-                int  face    = static_cast<int>(ev.face());
-                pending().push_back({uuid, clicked, face});
+                pending().push_back({uuidOf(player), ev.blockPos(), static_cast<int>(ev.face())});
             },
             ll::event::EventPriority::High
         ));
-        mListeners.push_back(bus.emplaceListener<ll::event::ServerLevelTickEvent>([](auto&) {
-            auto todo = std::exchange(pending(), {});
-            for (auto& p : todo) {
-                if (auto* carrier = playerByUuid(p.carrier)) tryPlace(*carrier, p.clicked, p.face);
-            }
-        }));
-        // The carried player leaves or dies: the carrier is resolved like a forced placement.
-        mListeners.push_back(bus.emplaceListener<ll::event::PlayerDisconnectEvent>([](ll::event::PlayerDisconnectEvent& ev
-                                                                                     ) {
-            auto& player = ev.self();
-            if (auto* carrier = carrierOf(player)) {
-                resolve(*carrier, player, "disconnected");
-            }
-            // A carrier leaving: the passenger is ejected by the game; release now so the seat and
-            // the carry do not outlive the ride.
-            if (carry::get(player).isPlayer()) release(player, "carrier left");
-        }));
+        // The carried player leaves or dies: the carrier is resolved like a forced placement. High
+        // priority: before the carry store drops the leaving player's cache entry.
+        mListeners.push_back(bus.emplaceListener<ll::event::PlayerDisconnectEvent>(
+            [](ll::event::PlayerDisconnectEvent& ev) {
+                auto& player = ev.self();
+                if (auto* carrier = carrierOf(player)) resolve(*carrier, player, "disconnected");
+                // A carrier leaving: the game ejects the passenger; the carry ends with the ride.
+                if (carry::get(player).isPlayer()) release(player, "carrier left");
+            },
+            ll::event::EventPriority::High
+        ));
         mListeners.push_back(bus.emplaceListener<ll::event::PlayerDieEvent>([](ll::event::PlayerDieEvent& ev) {
             if (auto* carrier = carrierOf(ev.self())) resolve(*carrier, ev.self(), "died");
         }));
@@ -462,7 +459,6 @@ private:
     }
     static void resolve(Player& carrier, Player& rider, char const* why) {
         carry::placeCarried(carrier);
-        restoreSeats(carrier);
         log().info("carry: {} released player {} ({})", carrier.getRealName(), rider.getRealName(), why);
     }
 
