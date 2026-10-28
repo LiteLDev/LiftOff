@@ -82,13 +82,6 @@ std::string controllerName(Side side, Axis axis) {
     return name;
 }
 
-std::string nativeVariable(Side side, char const* suffix) {
-    std::string name = "variable.liftoff_carry_";
-    name += side == Side::Right ? 'r' : 'l';
-    name += suffix;
-    return name;
-}
-
 std::vector<SlotAnimation> vanillaAnimations(Pose const& pose) {
     std::vector<SlotAnimation> out;
     for (Side side : {Side::Right, Side::Left}) {

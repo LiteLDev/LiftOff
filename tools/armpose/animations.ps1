@@ -7,7 +7,6 @@
 #   animation.liftoff.carry.<right|left>.<x|y|z>.<m|p><i>  one axis set absolutely to i * 0.05 rad
 #   animation.liftoff.carry.<right|left>.xc.<m|p><i>       x plus Carry On's crouch term (-0.2 rad)
 #   animation.liftoff.carry.first_person.right             first-person right arm (left arm is hidden)
-#   animation.liftoff.carry.native                         exact values from molang variables (modded clients)
 #   animation.liftoff.carry.none                           empty (ends a slot)
 # Every third-person value is skipped while swimming / gliding (Carry On keeps the vanilla pose) and in
 # first person. While sneaking Bedrock tilts the player's root 28 degrees forward (Java does not move the
@@ -56,28 +55,6 @@ $fp = { param($v) "`"v.is_first_person ? -this + $(Num $v) : 0.0`"" }
 Add-Anim 'animation.liftoff.carry.first_person.right' ("`"rightarm`": {`"position`": [$(& $fp $fpPos[0]), $(& $fp $fpPos[1]), $(& $fp $fpPos[2])], " +
     "`"rotation`": [$(& $fp $fpRot[0]), $(& $fp $fpRot[1]), $(& $fp $fpRot[2])]}")
 
-# Native: v.liftoff_carry_<r|l> (1 = posed), _<r|l>x/y/z (Bedrock degrees), _<r|l>xc (1 = crouch term).
-$native = foreach ($p in @(@('right', 'r'), @('left', 'l'))) {
-    $bone, $c = $p
-    $on  = "v.liftoff_carry_$c"
-    $tp  = { param($axis, $extra) "$skip ? 0.0 : -this + v.liftoff_carry_$c$axis$extra" }
-    $x   = & $tp 'x' " - q.is_sneaking * ($(Num $sneakRoot) + v.liftoff_carry_${c}xc * $(Num $crouchDeg))"
-    $y   = & $tp 'y' ''
-    $z   = & $tp 'z' ''
-    if ($bone -eq 'right') {
-        $rot = @(
-            "`"$on ? (v.is_first_person ? -this + $(Num $fpRot[0]) : ($x)) : 0.0`"",
-            "`"$on ? (v.is_first_person ? -this + $(Num $fpRot[1]) : ($y)) : 0.0`"",
-            "`"$on ? (v.is_first_person ? -this + $(Num $fpRot[2]) : ($z)) : 0.0`""
-        )
-        $pos = @(0..2 | ForEach-Object { "`"$on && v.is_first_person ? -this + $(Num $fpPos[$_]) : 0.0`"" })
-        "`"rightarm`": {`"position`": [$($pos -join ', ')], `"rotation`": [$($rot -join ', ')]}"
-    } else {
-        $rot = @("`"$on ? ($x) : 0.0`"", "`"$on ? ($y) : 0.0`"", "`"$on ? ($z) : 0.0`"")
-        "`"leftarm`": {`"rotation`": [$($rot -join ', ')]}"
-    }
-}
-Add-Anim 'animation.liftoff.carry.native' ($native -join ', ')
 # An animation without bones is rejected by the client, and a rejected entry drops the whole file:
 # the empty animation adds 0 to one bone.
 $anims.Add('    "animation.liftoff.carry.none": {"loop": true, "bones": {"rightarm": {"rotation": [0.0, 0.0, 0.0]}}}')

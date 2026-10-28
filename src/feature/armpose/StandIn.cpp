@@ -16,7 +16,9 @@
 #include "mc/deps/ecs/gamerefs_entity/OwnerStorageEntity.h"
 #include "mc/deps/nbt/CompoundTag.h"
 #include "mc/deps/nbt/ByteTag.h"
+#include "mc/deps/nbt/IntTag.h"
 #include "mc/deps/nbt/ListTag.h"
+#include "mc/deps/nbt/StringTag.h"
 #include "mc/legacy/ActorRuntimeID.h"
 #include "mc/legacy/ActorUniqueID.h"
 #include "mc/network/MinecraftPacketIds.h"
@@ -154,7 +156,7 @@ std::shared_ptr<Packet> blockAddPacket(std::uint64_t id, Block const& block) {
     setItem(list, ActorDataIDs::Reserved038, kBlockScale);
     return pkt;
 }
-std::shared_ptr<Packet> entityAddPacket(std::string_view snbt, std::uint64_t id, StandIn& out) {
+std::shared_ptr<Packet> entityAddPacket(std::string_view snbt, std::uint64_t id, StandIn& out, float fixedScale = 0.0f) {
     std::shared_ptr<AddActorPacket> pkt;
     bool ok = withTempActor(snbt, nullptr, [&](Actor& actor) {
         auto box = boxOf(actor);
@@ -175,7 +177,7 @@ std::shared_ptr<Packet> entityAddPacket(std::string_view snbt, std::uint64_t id,
         });
         fixFlags(list, false);
         // Carry On (third person): 0.6 * 1.666 * (10 - min(9.9, h * w)) * 0.08.
-        float s = 0.6f * 1.666f * (10.0f - std::min(9.9f, box.height * box.width)) * 0.08f;
+        float s = fixedScale > 0.0f ? fixedScale : 0.6f * 1.666f * (10.0f - std::min(9.9f, box.height * box.width)) * 0.08f;
         float base = scaleOf(list);
         setItem(list, ActorDataIDs::Reserved038, base * s);
         out.scale  = base * s;
@@ -285,7 +287,15 @@ StandIn buildStandIn(carry::CarryData const& data, carry::CarryVisual const& vis
         s.scale     = kBlockScale;
         s.height    = kBlockScale;
         s.width     = kBlockScale;
-        s.add       = blockAddPacket(id, *block);
+        // Built from a real (temporary) falling block, so the client gets every data item it expects.
+        CompoundTag nbt;
+        nbt["identifier"]   = StringTag("minecraft:falling_block");
+        nbt["FallingBlock"] = std::move(*block->mSerializationId->clone());
+        nbt["Variant"]      = IntTag(static_cast<int>(block->mNetworkId));
+        nbt["Time"]         = ByteTag(1);
+        StandIn tmp;
+        s.add = entityAddPacket(carry::toSnbt(nbt), id, tmp, kBlockScale);
+        if (!s.add) s.add = blockAddPacket(id, *block);
         break;
     }
     case Kind::Entity: {

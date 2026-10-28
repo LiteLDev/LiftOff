@@ -74,7 +74,6 @@ TEST(ArmPose, Names) {
     EXPECT_EQ(animationName(Side::Left, Axis::Y, 3), "animation.liftoff.carry.left.y.p3");
     EXPECT_EQ(animationName(Side::Left, Axis::Z, 0, true), "animation.liftoff.carry.left.z.0"); // xc only for x
     EXPECT_EQ(controllerName(Side::Right, Axis::Z), "liftoff.carry.right.z");
-    EXPECT_EQ(nativeVariable(Side::Left, "xc"), "variable.liftoff_carry_lxc");
 }
 
 TEST(ArmPose, VanillaAnimations) {

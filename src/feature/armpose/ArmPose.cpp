@@ -111,7 +111,8 @@ struct Carrier {
 struct Pair {
     int           version = -1;
     int           dim     = 0;
-    std::uint64_t standIn = 0; ///< id shown, 0 = none
+    std::uint64_t standIn = 0;     ///< id shown, 0 = none
+    bool          modded  = false; ///< the viewer runs the client mod (no stand-in)
 };
 
 struct PairKey {
@@ -137,9 +138,10 @@ State& state() {
     return s;
 }
 
-/// A viewer that gets vanilla packets: not modded; simulated players only as test viewers.
-bool isVanillaViewer(Player const& p) {
-    if (net::isModded(p)) return false;
+/// A viewer that gets the arm pose: every client (simulated players only as test viewers). Modded
+/// clients get the same animations (they load them into their animation group, see
+/// src/client/armpose); only vanilla clients get stand-ins.
+bool isViewer(Player const& p) {
     if (p.isSimulatedPlayer()) return state().testViewers.contains(idOf(p));
     return true;
 }
@@ -210,7 +212,7 @@ void tick() {
     level->forEachPlayer([&](Player& p) {
         players[idOf(p)] = &p;
         bool settled = carry::tickCount(p) >= kJoinDelay || s.testViewers.contains(idOf(p));
-        if (isVanillaViewer(p) && settled) viewers.push_back(&p);
+        if (isViewer(p) && settled) viewers.push_back(&p);
         return true;
     });
     auto playerOf = [&](std::int64_t id) -> Player* {
@@ -232,12 +234,12 @@ void tick() {
     s.dirty.clear();
     s.announced.clear();
 
-    // Pairs whose carrier stopped carrying / left, or whose viewer left / turned modded.
+    // Pairs whose carrier stopped carrying / left, or whose viewer left / changed its kind.
     std::erase_if(s.pairs, [&](auto const& kv) {
         auto const& [key, pair] = kv;
         Player* viewer  = playerOf(key.viewer);
         Player* carrier = playerOf(key.carrier);
-        bool    keep    = carrying.contains(key.carrier) && viewer && isVanillaViewer(*viewer);
+        bool    keep    = carrying.contains(key.carrier) && viewer && isViewer(*viewer) && pair.modded == net::isModded(*viewer);
         if (!keep) endPair(viewer, carrier, pair);
         return !keep;
     });
@@ -265,9 +267,10 @@ void tick() {
             int   dim  = static_cast<int>(viewer->getDimensionId());
             if (pair.version >= 0 && pair.dim != dim) pair = Pair{}; // the client dropped every actor
             pair.dim = dim;
+            if (pair.version < 0) pair.modded = net::isModded(*viewer);
             if (pair.version != c.version || resend) {
                 sendAnimations(*viewer, *carrier, c.anims);
-                if (pair.version != c.version && !self) {
+                if (pair.version != c.version && !self && !pair.modded) {
                     if (pair.standIn) sendRemove(*viewer, pair.standIn);
                     pair.standIn = 0;
                     if (at) {

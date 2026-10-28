@@ -11,10 +11,9 @@
 //
 // Bedrock (resource pack `animations/liftoff_carry.animation.json`, written by
 // `tools/armpose/animations.ps1`): one animation per arm, axis and value, each setting only its own
-// axis absolutely (`-this + value`), so the six slots can play in any order. Vanilla clients get them
+// axis absolutely (`-this + value`), so the six slots can play in any order. Every client gets them
 // from the server (`AnimateEntityPacket`, one runtime controller per slot); crouching is read on the
-// client (`query.is_sneaking`), so the server only re-sends on carry changes. Modded clients play
-// `kNativeAnimation`, which reads exact values from molang variables (`nativeVariable`).
+// client (`query.is_sneaking`), so the server only re-sends on carry changes.
 
 #include <array>
 #include <optional>
@@ -96,15 +95,6 @@ inline constexpr char kFirstPersonAnimation[]  = "animation.liftoff.carry.first_
 inline constexpr char kFirstPersonController[] = "liftoff.carry.first_person.right";
 /// An empty animation: played into a slot to end what it played.
 inline constexpr char kNoneAnimation[] = "animation.liftoff.carry.none";
-/// Modded clients: exact values from molang variables.
-inline constexpr char kNativeAnimation[]  = "animation.liftoff.carry.native";
-inline constexpr char kNativeController[] = "liftoff.carry.native";
-
-/// Molang variable of the native animation, e.g. ("variable.liftoff_carry_rx"):
-/// `<side>` = 1 when the arm is posed, `<side>x|y|z` = Bedrock degrees, `<side>xc` = 1 when the
-/// crouch term applies.
-[[nodiscard]] std::string nativeVariable(Side side, char const* suffix);
-
 /// One animation played into one runtime controller.
 struct SlotAnimation {
     std::string controller;

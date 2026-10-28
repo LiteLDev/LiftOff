@@ -196,11 +196,13 @@ LO_REGISTER_SELFTEST("armpose.modded_viewer", [](Context& ctx) -> ll::coro::Coro
     (void)lo::net::takeTestMessages(*viewer);
     carry::set(*carrier, blockCarry("minecraft:stone"));
     co_await ctx.ticks(3);
-    ctx.check(armpose::takeTestPackets(*viewer).empty(), "a modded viewer gets no vanilla arm pose or stand-in");
+    auto modded = armpose::takeTestPackets(*viewer);
+    ctx.check(ofKind(modded, "animate").size() == ap::allControllers().size(), "a modded viewer gets the arm pose");
+    ctx.check(ofKind(modded, "add").empty(), "a modded viewer gets no stand-in");
     auto msgs = lo::net::takeTestMessages(*viewer);
     ctx.check(
         std::any_of(msgs.begin(), msgs.end(), [](auto const& m) { return m.first.find("CarrySyncPacket") != std::string::npos; }),
-        "it gets the carry sync and draws natively"
+        "it gets the carry sync and draws the carried thing natively"
     );
     ctx.check(armpose::standInShownTo(*carrier, *viewer) == 0, "no stand-in tracked for a modded viewer");
     lo::net::setTestModded(*viewer, false);
@@ -385,7 +387,7 @@ LO_REGISTER_SELFTEST("armpose.pack", [](Context& ctx) {
     ctx.check(!anims.contains(ap::animationName(ap::Side::Right, ap::Axis::X, ap::kMaxIndex + 1)), "the table ends at kMaxIndex");
     auto sneak = "q.is_sneaking * " + std::to_string(static_cast<int>(ap::kSneakRootDegrees));
     ctx.check(anims[ap::animationName(ap::Side::Left, ap::Axis::X, 0)].dump().find(sneak) != std::string::npos, "sneak tilt matches kSneakRootDegrees");
-    for (char const* name : {ap::kFirstPersonAnimation, ap::kNoneAnimation, ap::kNativeAnimation}) {
+    for (char const* name : {ap::kFirstPersonAnimation, ap::kNoneAnimation}) {
         ctx.check(anims.contains(name), std::string(name) + " exists");
     }
 });

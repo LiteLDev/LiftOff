@@ -5,8 +5,8 @@
 //
 // - Arm pose: resource-pack animations (`animations/liftoff_carry.animation.json`, see
 //   core/ArmPose.h). The player entity file is not touched: the server starts the animations on
-//   vanilla clients with `AnimateEntityPacket` (like /playanimation), modded clients play the native
-//   variant themselves with exact values (src/client/armpose/).
+//   every client with `AnimateEntityPacket` (like /playanimation); modded clients load the animation
+//   file into their animation group themselves (src/client/armpose/).
 // - Stand-in: vanilla viewers of a carrier get a client-only display actor that never exists on the
 //   server: a carried block (or item visual) is a display block (a falling block that never falls,
 //   the block's default state at Carry On's 0.6 scale; an invisible armor stand's worn item does not
@@ -15,7 +15,7 @@
 //   view. It follows the carrier with `MoveActorAbsolutePacket`. A carried player rides the carrier
 //   for real (U5) and needs no stand-in. The carrier's own client gets no stand-in (in first person it
 //   would cover the view; SPEC: vanilla carriers see their arm pose only).
-// - Modded viewers (`net::isModded`) never get any of these packets: they draw natively (U10/U11).
+// - Modded viewers (`net::isModded`) get the arm pose but never a stand-in: they draw the carried thing natively (U10/U11).
 //
 // Everything below runs on the server thread.
 

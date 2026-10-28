@@ -1,229 +1,88 @@
-// U13 armpose, modded clients (docs/SPEC.md §4.5): every player the client sees with a synced carry
-// plays `animation.liftoff.carry.native`, whose arm values come from molang variables set here with the
-// exact Carry On values (no quantisation) and this client's `renderArms` / `rotateEntitiesSideways`.
-// The server never sends the vanilla animations to a modded client.
+// U13 armpose, modded clients (docs/SPEC.md §4.5): the server plays the arm animations on every
+// client (`AnimateEntityPacket`, see feature/armpose/ArmPose.h); this part makes sure the client knows
+// them.
+//
+// LeviLamina puts the mod's resource pack on the client's resource stack (its files load through the
+// ResourcePackManager), but the client's actor animation group is filled before that and never sees
+// the pack's animation file. A local world (modded client + integrated server) would then play
+// unknown animations, i.e. nothing. So the client loads `animations/liftoff_carry.animation.json` into
+// its animation group itself, once per level. On a BDS the pack also arrives as a world pack; loading
+// it again only replaces the same animations.
 
 #ifdef LO_CLIENT
 
-#include <cmath>
-#include <cstdint>
 #include <string>
-#include <unordered_map>
 
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/client/ClientExitLevelEvent.h"
 #include "ll/api/event/world/ClientLevelTickEvent.h"
 
 #include "mc/client/game/ClientInstance.h"
+#include "mc/deps/core/file/Path.h"
 #include "mc/deps/core/file/PathView.h"
 #include "mc/deps/core/resource/ResourceLocation.h"
 #include "mc/deps/core/string/HashedString.h"
 #include "mc/resources/MinEngineVersion.h"
 #include "mc/resources/PackStats.h"
 #include "mc/resources/ResourcePackManager.h"
+#include "mc/server/commands/CurrentCmdVersion.h"
 #include "mc/world/actor/animation/ActorAnimationGroup.h"
 #include "mc/world/actor/animation/ActorAnimationInfo.h"
 #include "mc/world/actor/animation/ActorSkeletalAnimation.h"
-#include "mc/deps/core/file/Path.h"
-#include "mc/server/commands/CurrentCmdVersion.h"
-#include "client/Client.h"
-#include "mc/legacy/ActorRuntimeID.h"
-#include "mc/legacy/ActorUniqueID.h"
-#include "mc/util/MolangScriptArg.h"
-#include "mc/util/MolangVariableMap.h"
-#include "mc/molang/MolangVersion.h"
-#include "mc/world/actor/Actor.h"
-#include "mc/world/actor/animation/AnimationComponent.h"
-#include "mc/world/actor/player/Player.h"
 #include "mc/world/level/Level.h"
 
+#include "client/Client.h"
 #include "core/ArmPose.h"
-#include "feature/armpose/ArmPose.h"
-#include "feature/carry/CarryConfig.h"
-#include "feature/carry/CarryData.h"
-#include "mod/Config.h"
 #include "mod/Log.h"
 #include "mod/Module.h"
-#include "net/CarryProtocol.h"
 
 namespace lo::client::armpose {
 
 namespace ap = core::armpose;
-using feature::carry::CarryData;
 
 namespace {
-constexpr int kReplayInterval = 100; ///< ticks: play the native animation again (cheap; survives resets)
+constexpr char kAnimationFile[] = "animations/liftoff_carry.animation.json";
 
-struct Tracked {
-    CarryData     data;
-    ap::Pose      pose;
-    void const*   actor   = nullptr; ///< identity only, never dereferenced
-    std::uint64_t runtime = 0;
-    int           sinceReplay = 0;
-    bool          renderArms  = true;
-    bool          sideways    = false;
-};
-std::unordered_map<std::int64_t, Tracked>& tracked() {
-    static std::unordered_map<std::int64_t, Tracked> t;
-    return t;
+/// getActorAnimationInfo creates an empty entry for unknown names: check the parsed animation.
+bool parsed(ActorAnimationGroup& group, char const* name) {
+    auto info = group.getActorAnimationInfo(HashedString(name));
+    return info && info->mPtr.get() != nullptr;
 }
 
-/// Same carried thing (the key state is part of the record but does not change the pose).
-bool sameCarry(CarryData a, CarryData const& b) {
-    a.keyPressed = b.keyPressed;
-    return a == b;
-}
-
-void setVar(Actor& actor, std::string const& name, float value) {
-    actor.mMolangVariables->setMolangVariable(HashedString(name), MolangScriptArg(value));
-}
-
-void applyPose(Actor& actor, ap::Pose const& pose) {
-    for (auto side : {ap::Side::Right, ap::Side::Left}) {
-        auto const& arm = pose.arm(side);
-        setVar(actor, ap::nativeVariable(side, ""), arm.active ? 1.0f : 0.0f);
-        setVar(actor, ap::nativeVariable(side, "x"), ap::toDegrees(arm.rotation[0]));
-        setVar(actor, ap::nativeVariable(side, "y"), ap::toDegrees(arm.rotation[1]));
-        setVar(actor, ap::nativeVariable(side, "z"), ap::toDegrees(arm.rotation[2]));
-        setVar(actor, ap::nativeVariable(side, "xc"), arm.crouchX ? 1.0f : 0.0f);
-    }
-}
-
-void play(Actor& actor) {
-    actor.getAnimationComponent().editGlobalAnimationData(
-        HashedString(ap::kNativeAnimation),
-        0.0f,
-        "0",
-        MolangVersion::Latest,
-        "",
-        ap::kNativeController
-    );
-}
-
-/// Makes sure the level's animation group has the arm animations. LeviLamina puts the mod's resource
-/// pack on the client's stack, but its animation files did not reach the actor animation group in
-/// practice (the files load through the ResourcePackManager, yet no animation of them is known);
-/// so the client loads the file into the group itself, once per level.
-void ensureAnimations(Level& level) {
+void const*& doneLevel() {
     static void const* done = nullptr;
+    return done;
+}
+
+void ensureAnimations(Level& level) {
+    auto& done = doneLevel();
     if (done == &level) return;
-    done       = &level;
-    auto* ci = client::currentClient();
+    done = &level;
+    auto* ci = currentClient();
     if (!ci) return;
-    auto groupPtr = ci->getActorAnimationGroup(); // the client's group (the level's is unused on clients)
-    auto* group   = groupPtr.get();
-    if (!group) {
-        log().warn("armpose: the client has no actor animation group");
-        return;
-    }
-    // getActorAnimationInfo creates an empty entry for unknown names: check the parsed animation.
-    auto loaded = [&](char const* name) -> int { // 1 parsed, -1 unknown / failed
-        auto info = group->getActorAnimationInfo(HashedString(name));
-        if (!info || !info->mPtr.get()) return -1;
-        return 1; // parsed
-    };
-    int  before  = loaded(ap::kNativeAnimation);
-    int  vanilla = loaded("animation.player.move.arms.zombie");
-    int  after   = before;
-    if (before < 0) {
+    auto groupPtr = ci->getActorAnimationGroup(); // the client's group (a client level has none)
+    if (!groupPtr) return;
+    auto& group  = *groupPtr;
+    bool  before = parsed(group, ap::kNoneAnimation);
+    bool  after  = before;
+    if (!before) {
         std::string text;
-        if (ci->getResourcePackManager().load(ResourceLocation(Core::PathView("animations/liftoff_carry.animation.json")), text)) {
+        if (ci->getResourcePackManager().load(ResourceLocation(Core::PathView(kAnimationFile)), text)) {
             PackStats stats{};
-            group->loadActorAnimation(
+            group.loadActorAnimation(
                 text,
-                Core::Path("animations/liftoff_carry.animation.json"),
+                Core::Path(kAnimationFile),
                 stats,
                 MinEngineVersion::fromString("1.21.40"),
                 CurrentCmdVersion::Latest,
                 false,
                 ""
             );
-            after = loaded(ap::kNativeAnimation);
+            after = parsed(group, ap::kNoneAnimation);
         }
     }
-    // TEMPORARY diagnostics: which variants parse?
-    struct Variant {
-        char const* name;
-        char const* engine;
-        std::string json;
-    };
-    auto wrap = [](char const* fmt, std::string const& body) {
-        return std::string("{\"format_version\":\"") + fmt + "\",\"animations\":{" + body + "}}";
-    };
-    std::string constBody = "\"animation.liftoff.t.NAME\":{\"loop\":true,\"bones\":{\"rightarm\":{\"rotation\":[-90.0,0.0,0.0]}}}";
-    auto named = [&](char const* n) {
-        auto s = constBody;
-        s.replace(s.find("NAME"), 4, n);
-        return s;
-    };
-    std::vector<Variant> variants{
-        {"c18e2140", "1.21.40", wrap("1.8.0", named("c18e2140"))},
-        {"c110e2140", "1.21.40", wrap("1.10.0", named("c110e2140"))},
-        {"c18e180", "1.8.0", wrap("1.8.0", named("c18e180"))},
-        {"none", "1.21.40", wrap("1.8.0", "\"animation.liftoff.t.none\":{\"loop\":true,\"bones\":{}}")},
-        {"expr", "1.21.40", wrap("1.8.0", "\"animation.liftoff.t.expr\":{\"loop\":true,\"bones\":{\"rightarm\":{\"rotation\":[\"(v.is_first_person || q.is_swimming || q.is_gliding) ? 0.0 : -this + -57.2958 - q.is_sneaking * 28\",0.0,0.0]}}}")},
-    };
-    for (auto const& v : variants) {
-        PackStats stats{};
-        group->loadActorAnimation(v.json, Core::Path("animations/liftoff_probe.animation.json"), stats, MinEngineVersion::fromString(v.engine), CurrentCmdVersion::Latest, false, "");
-        log().info("armpose: probe variant {} parsed {}", v.name, loaded((std::string("animation.liftoff.t.") + v.name).c_str()));
-    }
-    log().info(
-        "armpose: arm animations in the client animation group (bones): before {}, after {}, right.x.0 {}, vanilla zombie {}",
-        before,
-        after,
-        loaded(ap::animationName(ap::Side::Right, ap::Axis::X, 0).c_str()),
-        vanilla
-    );
-}
-
-void tick(Level& level) {
-    ensureAnimations(level);
-    auto const& cfg   = config::get<feature::carry::CarryClientConfig>().settings;
-    auto&       known = tracked();
-    std::unordered_map<std::int64_t, bool> seen;
-    level.forEachPlayer([&](Player& p) {
-        auto id   = p.getOrCreateUniqueID().rawID;
-        auto data = client::carry::carriedOf(id);
-        auto it   = known.find(id);
-        if (!data) {
-            if (it != known.end()) {
-                applyPose(p, ap::Pose{}); // arms back to vanilla; the animation adds nothing now
-                known.erase(it);
-            }
-            return true;
-        }
-        seen[id] = true;
-        bool fresh = it == known.end();
-        auto& t    = known[id];
-        bool changed = fresh || !sameCarry(t.data, *data) || t.renderArms != cfg.renderArms || t.sideways != cfg.rotateEntitiesSideways;
-        if (changed) {
-            t.data       = *data;
-            t.renderArms = cfg.renderArms;
-            t.sideways   = cfg.rotateEntitiesSideways;
-            t.pose       = feature::armpose::poseFor(*data, cfg.renderArms, cfg.rotateEntitiesSideways, &level);
-        }
-        bool newActor = t.actor != &p || t.runtime != p.getRuntimeID().rawID;
-        if (changed || newActor) applyPose(p, t.pose);
-        if (newActor || ++t.sinceReplay >= kReplayInterval) {
-            play(p);
-            t.actor       = &p;
-            t.runtime     = p.getRuntimeID().rawID;
-            t.sinceReplay = 0;
-        }
-        if (changed) {
-            log().info(
-                "armpose: native pose for {} (right {:.3f} {:.3f} {:.3f}, molang {:.2f})",
-                p.getRealName(),
-                t.pose.right.rotation[0],
-                t.pose.right.rotation[1],
-                t.pose.right.rotation[2],
-                p.evalMolang(ap::nativeVariable(ap::Side::Right, "x"))
-            );
-        }
-        return true;
-    });
-    std::erase_if(known, [&](auto const& kv) { return !seen.contains(kv.first); });
+    if (after) log().info("armpose: arm animations ready on the client{}", before ? "" : " (loaded by LiftOff)");
+    else log().warn("armpose: the arm animations are missing on the client ({})", kAnimationFile);
 }
 } // namespace
 
@@ -232,15 +91,14 @@ public:
     void install() {
         auto& bus = ll::event::EventBus::getInstance();
         mListeners.push_back(bus.emplaceListener<ll::event::ClientLevelTickEvent>([](ll::event::ClientLevelTickEvent& ev) {
-            tick(ev.level());
+            ensureAnimations(ev.level());
         }));
-        mListeners.push_back(bus.emplaceListener<ll::event::ClientExitLevelEvent>([](auto&) { tracked().clear(); }));
+        mListeners.push_back(bus.emplaceListener<ll::event::ClientExitLevelEvent>([](auto&) { doneLevel() = nullptr; }));
     }
     void uninstall() {
         auto& bus = ll::event::EventBus::getInstance();
         for (auto& l : mListeners) bus.removeListener(l);
         mListeners.clear();
-        tracked().clear();
     }
 
 private:
