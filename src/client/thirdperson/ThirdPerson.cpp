@@ -37,6 +37,7 @@
 #include "mc/deps/ecs/gamerefs_entity/OwnerStorageEntity.h"
 #include "mc/deps/game_refs/OwnerPtr.h"
 #include "mc/deps/nbt/CompoundTag.h"
+#include "mc/deps/nbt/ListTag.h"
 #include "mc/deps/renderer/Camera.h"
 #include "mc/deps/renderer/MatrixStack.h"
 #include "mc/world/actor/Actor.h"
@@ -49,6 +50,7 @@
 #include "mc/deps/minecraft_renderer/game/ItemContextFlags.h"
 #include "mc/world/item/ItemStack.h"
 #include "mc/world/level/block/Block.h"
+#include "mc/world/level/dimension/Dimension.h"
 #include "mc/world/level/block/BlockType.h"
 #include "mc/world/phys/AABB.h"
 
@@ -196,20 +198,25 @@ void build(Entry& e, CarryData const& data, Actor& carrier) {
         auto  id     = carry::entityIdOf(e.visual.entity);
         if (!level || !tag || id.empty()) break;
         stripForDisplay(*tag);
-        auto owner = level->getActorFactory().clientCreateDisplayActor(
-            ActorDefinitionIdentifier(id),
-            &carrier,
-            carrier.getPosition(),
-            Vec2{0.f, 0.f}
-        );
-        Actor* actor = owner.tryUnwrap().as_ptr();
-        if (!actor) break;
+        Vec3 const& at = carrier.getPosition();
+        (*tag)["Pos"]  = ListTag{at.x, at.y, at.z};
+        // Built from the NBT like a loaded entity (variant, colour, age...), but never added to the level.
         DefaultDataLoadHelper helper;
-        actor->load(*tag, helper);
+        auto owner = std::make_unique<OwnerPtr<EntityContext>>(
+            level->getActorFactory().loadActor(&*tag, helper, carrier.getDimension().mHeightRange, nullptr)
+        );
+        Actor* actor = owner->tryUnwrap().as_ptr();
+        if (!actor) {
+            owner = std::make_unique<OwnerPtr<EntityContext>>(
+                level->getActorFactory().clientCreateDisplayActor(ActorDefinitionIdentifier(id), &carrier, at, Vec2{0.f, 0.f})
+            );
+            actor = owner->tryUnwrap().as_ptr();
+        }
+        if (!actor) break;
         actor->setNameTag("");
         // Lighting and the renderer read the actor's dimension: the carrier's.
         actor->setDimension(unwrap(carrier.mDimension));
-        e.displayActor = std::make_unique<OwnerPtr<EntityContext>>(std::move(owner));
+        e.displayActor = std::move(owner);
         e.level        = level;
         e.height       = boxHeight(*actor);
         e.width        = boxWidth(*actor);
@@ -281,6 +288,12 @@ void recordDraw(std::int64_t id, CarryVisual::Kind kind, bool viaActor, std::arr
     st.center       = center;
 }
 
+/// The carried object is the same (ignores the slot, tick and key state, which change nothing drawn).
+bool sameCarried(CarryData const& a, CarryData const& b) {
+    return a.type == b.type && a.block == b.block && a.blockEntity == b.blockEntity && a.entity == b.entity
+        && a.activeScript == b.activeScript && a.scriptRender == b.scriptRender;
+}
+
 /// Drops the entries of carriers that are no longer drawn (out of view) or no longer carry (state lock held).
 void prune(State& s, Clock::time_point now) {
     if (now - s.lastPrune < std::chrono::seconds(1)) return;
@@ -291,7 +304,7 @@ void prune(State& s, Clock::time_point now) {
 }
 
 /// Draws `carrier`'s carry after the carrier itself was drawn.
-void drawCarried(BaseActorRenderContext& ctx, Actor& carrier, Vec3 const& cameraTarget, Vec3 const& renderPos, bool identityBase) {
+void drawCarried(BaseActorRenderContext& ctx, Actor& carrier, Vec3 const& cameraTarget, Vec3 const& renderPos, bool identityBase, Vec2 rdRot) {
     if (!carrier.isPlayer()) return;
     if (ctx.mIsRenderingOnMap || ctx.mScreenContext.isDrawingUI) return; // paper doll, maps
     // The local player in first person: U10 draws the carry in the hands.
@@ -309,7 +322,17 @@ void drawCarried(BaseActorRenderContext& ctx, Actor& carrier, Vec3 const& camera
     }
     auto [it, fresh] = s.entries.try_emplace(id);
     Entry& e         = it->second;
-    if (fresh || !(e.data == *data)) build(e, *data, carrier);
+    if (fresh || !sameCarried(e.data, *data)) {
+        build(e, *data, carrier);
+        log().info(
+            "thirdperson: yaw check body {:.1f} head {:.1f} rot {:.1f} render {:.1f} {:.1f}",
+            carrier.getInterpolatedBodyRot(ctx.getFrameAlpha(carrier)),
+            carrier.getInterpolatedHeadRot(ctx.getFrameAlpha(carrier)),
+            carrier.getRotation().y,
+            rdRot.x,
+            rdRot.y
+        );
+    }
     e.lastDraw = now;
     if (e.broken) return;
 
@@ -385,7 +408,7 @@ void drawCarried(BaseActorRenderContext& ctx, Actor& carrier, Vec3 const& camera
 // ---- hooks ---------------------------------------------------------------------------------------
 
 namespace {
-std::atomic<int> gDiag[3]{};
+std::atomic<int> gDiag[1]{};
 
 void diagnose(int which, char const* name, BaseActorRenderContext& ctx, Actor& actor, Vec3 const& renderPos) {
     if (gDiag[which]++ != 0) return;
@@ -449,42 +472,10 @@ LL_TYPE_INSTANCE_HOOK(
                 // The render data holds the world position; the identity world matrix is camera-relative.
         Vec3 const& camera = unwrap(unwrap(ctx.mImpl)->mCameraTargetPosition);
         Vec3 const& pos    = unwrap(rd.position);
-        drawCarried(ctx, *actor, camera, Vec3{pos.x - camera.x, pos.y - camera.y, pos.z - camera.z}, true);
+        drawCarried(ctx, *actor, camera, Vec3{pos.x - camera.x, pos.y - camera.y, pos.z - camera.z}, true, unwrap(rd.rotation));
     });
 }
 
-LL_TYPE_INSTANCE_HOOK(
-    DispatcherRenderHook,
-    ll::memory::HookPriority::Normal,
-    ActorRenderDispatcher,
-    &ActorRenderDispatcher::render,
-    void,
-    BaseActorRenderContext& ctx,
-    Actor&                  entity,
-    Vec3 const&             cameraTargetPos,
-    Vec3 const&             pos,
-    Vec2 const&             rot,
-    bool                    ignoreLighting
-) {
-    origin(ctx, entity, cameraTargetPos, pos, rot, ignoreLighting);
-    if (tDrawing || !entity.isPlayer()) return;
-    guarded([&] { diagnose(1, "dispatcher", ctx, entity, pos); });
-}
-
-LL_TYPE_INSTANCE_HOOK(
-    DispatcherShortRenderHook,
-    ll::memory::HookPriority::Normal,
-    ActorRenderDispatcher,
-    &ActorRenderDispatcher::render,
-    void,
-    BaseActorRenderContext& ctx,
-    Actor&                  entity,
-    bool                    ignoreLighting
-) {
-    origin(ctx, entity, ignoreLighting);
-    if (tDrawing || !entity.isPlayer()) return;
-    guarded([&] { diagnose(2, "dispatcher-short", ctx, entity, entity.getPosition()); });
-}
 // ---- selftest API ----------------------------------------------------------------------------------
 
 DrawStats statsOf(std::int64_t uniqueId) {
@@ -542,14 +533,10 @@ public:
             });
         }
         HumanoidRenderHook::hook();
-        DispatcherRenderHook::hook();
-        DispatcherShortRenderHook::hook();
     }
 
     void uninstall() {
         HumanoidRenderHook::unhook();
-        DispatcherRenderHook::unhook();
-        DispatcherShortRenderHook::unhook();
         auto& bus = ll::event::EventBus::getInstance();
         for (auto& l : mListeners) bus.removeListener(l);
         mListeners.clear();
