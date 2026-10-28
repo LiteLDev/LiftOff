@@ -22,6 +22,8 @@
 #include "mc/resources/PackStats.h"
 #include "mc/resources/ResourcePackManager.h"
 #include "mc/world/actor/animation/ActorAnimationGroup.h"
+#include "mc/world/actor/animation/ActorAnimationInfo.h"
+#include "mc/world/actor/animation/ActorSkeletalAnimation.h"
 #include "mc/deps/core/file/Path.h"
 #include "mc/server/commands/CurrentCmdVersion.h"
 #include "client/Client.h"
@@ -114,10 +116,16 @@ void ensureAnimations(Level& level) {
         log().warn("armpose: the client has no actor animation group");
         return;
     }
-    bool before = group->getActorAnimationInfo(HashedString(ap::kNativeAnimation)) != nullptr;
-    bool vanilla = group->getActorAnimationInfo(HashedString("animation.player.move.arms.zombie")) != nullptr;
-    bool after   = before;
-    if (!before) {
+    // getActorAnimationInfo creates an empty entry for unknown names: check the parsed animation.
+    auto loaded = [&](char const* name) -> int { // 1 parsed, -1 unknown / failed
+        auto info = group->getActorAnimationInfo(HashedString(name));
+        if (!info || !info->mPtr.get()) return -1;
+        return 1; // parsed
+    };
+    int  before  = loaded(ap::kNativeAnimation);
+    int  vanilla = loaded("animation.player.move.arms.zombie");
+    int  after   = before;
+    if (before < 0) {
         std::string text;
         if (ci->getResourcePackManager().load(ResourceLocation(Core::PathView("animations/liftoff_carry.animation.json")), text)) {
             PackStats stats{};
@@ -130,10 +138,16 @@ void ensureAnimations(Level& level) {
                 false,
                 ""
             );
-            after = group->getActorAnimationInfo(HashedString(ap::kNativeAnimation)) != nullptr;
+            after = loaded(ap::kNativeAnimation);
         }
     }
-    log().info("armpose: arm animations in the client animation group: before {}, after {} (vanilla {})", before, after, vanilla);
+    log().info(
+        "armpose: arm animations in the client animation group (bones): before {}, after {}, right.x.0 {}, vanilla zombie {}",
+        before,
+        after,
+        loaded(ap::animationName(ap::Side::Right, ap::Axis::X, 0).c_str()),
+        vanilla
+    );
 }
 
 void tick(Level& level) {
