@@ -241,7 +241,10 @@ LO_REGISTER_SELFTEST("modeloverrides.script_render", [](Context& ctx) {
     e.scriptRender = nlohmann::json::parse(R"({"nbt": "{Saddled:1b,Variant:3}"})");
     ev             = baseVisual(e);
     m::applyVisual(e, ev, true);
-    ctx.check(contains(ev.entity, R"(identifier:"minecraft:pig")") && contains(ev.entity, "Saddled:1b") && contains(ev.entity, "Variant:3") && contains(ev.entity, "UniqueID:42L"), "nbt alone is merged into the carried entity");
+    auto merged   = carry::parseNbt(ev.entity);
+    auto expected = carry::parseNbt(R"({identifier:"minecraft:pig",Saddled:1b,Variant:3,UniqueID:42L})");
+    ctx.require(merged.has_value() && expected.has_value(), "merged entity SNBT parses");
+    ctx.check(m::nbtPartialMatch(*expected, *merged), "nbt alone is merged into the carried entity (" + ev.entity + ")");
 
     // No script render: nothing changes.
     e.scriptRender = nullptr;
