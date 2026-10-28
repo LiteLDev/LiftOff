@@ -23,12 +23,37 @@ function Invoke-HeldSelfTest([string]$Name, [scriptblock]$During) {
     return $r
 }
 
+# Mean absolute colour difference (0-255) of two screenshots in the lower middle of the screen, where
+# the carried object is drawn (the vanilla hand is on the right, the hotbar below).
+Add-Type -AssemblyName System.Drawing
+function Get-RegionDiff([string]$A, [string]$B) {
+    $ia = [System.Drawing.Bitmap]::new($A); $ib = [System.Drawing.Bitmap]::new($B)
+    try {
+        $sum = 0.0; $n = 0
+        for ($x = [int]($ia.Width * 0.35); $x -lt [int]($ia.Width * 0.65); $x += 4) {
+            for ($y = [int]($ia.Height * 0.55); $y -lt [int]($ia.Height * 0.85); $y += 4) {
+                $p = $ia.GetPixel($x, $y); $q = $ib.GetPixel($x, $y)
+                $sum += ([Math]::Abs($p.R - $q.R) + [Math]::Abs($p.G - $q.G) + [Math]::Abs($p.B - $q.B)) / 3.0
+                $n++
+            }
+        }
+        return $sum / $n
+    } finally { $ia.Dispose(); $ib.Dispose() }
+}
+function Assert-Drawn([string]$What, [string]$Before, [string]$During) {
+    if (-not $During) { throw "$What was never screenshotted" }
+    $d = Get-RegionDiff $Before $During
+    Write-Step ("{0}: lower-middle region differs by {1:N1} from the empty view" -f $What, $d)
+    if ($d -lt 12) { throw "$What is not visible in first person (region diff $([Math]::Round($d, 1)))" }
+}
+
 Invoke-SelfTest 'firstperson.is_chest' -TimeoutSeconds 60 | Out-Null
 Invoke-SelfTest 'firstperson.transforms' -TimeoutSeconds 60 | Out-Null
 
+$empty = Save-Screenshot 'empty'
 Invoke-HeldSelfTest 'firstperson.chest' {
     Start-Sleep -Milliseconds 300
-    Save-Screenshot 'chest' | Out-Null
+    $script:chestShot = Save-Screenshot 'chest'
     Press-Key F5; Start-Sleep -Milliseconds 500
     Save-Screenshot 'chest-third-back' | Out-Null
     Press-Key F5; Start-Sleep -Milliseconds 500
@@ -44,10 +69,12 @@ Invoke-HeldSelfTest 'firstperson.furnace' {
 
 Invoke-HeldSelfTest 'firstperson.pig' {
     Start-Sleep -Milliseconds 300
-    Save-Screenshot 'pig' | Out-Null
+    $script:pigShot = Save-Screenshot 'pig'
 } | Out-Null
 
 Save-Screenshot 'after' | Out-Null
+Assert-Drawn 'the carried chest' $empty $script:chestShot
+Assert-Drawn 'the carried pig' $empty $script:pigShot
 foreach ($line in 'firstperson: drawing block minecraft:chest', 'firstperson: drawing entity minecraft:pig') {
     if (-not (Get-LeviLog | Where-Object { $_ -match $line })) { throw "missing log line '$line'" }
 }

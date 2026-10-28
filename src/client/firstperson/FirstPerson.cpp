@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <vector>
 
 #include "glm/gtc/constants.hpp"
 #include "glm/gtc/matrix_transform.hpp"
@@ -40,7 +41,17 @@
 #include "mc/world/actor/provider/ActorMovement.h"
 #include "mc/world/actor/provider/PlayerMovement.h"
 #include "mc/world/item/ItemStack.h"
+#include "mc/world/level/BaseMobSpawner.h"
+#include "mc/world/level/BlockPos.h"
 #include "mc/world/level/block/Block.h"
+#include "mc/world/actor/ActorDataIDs.h"
+#include "mc/world/actor/ActorFlags.h"
+#include "mc/world/actor/DataItem2.h"
+#include "mc/world/actor/SynchedActorDataEntityWrapper.h"
+#include "mc/deps/nbt/ByteTag.h"
+#include "mc/deps/nbt/CompoundTag.h"
+#include "mc/deps/nbt/IntTag.h"
+#include "mc/deps/nbt/ShortTag.h"
 #include "mc/world/level/dimension/Dimension.h"
 
 #include "client/Client.h"
@@ -123,6 +134,20 @@ glm::mat4 entityTransform(float h, float w, bool rotateSideways, CarryVisual con
 
 namespace {
 
+/// A mob spawner that is never placed: the game's own way to build a fully initialised client-only
+/// actor of a type (vanilla draws the mob spinning in a spawner with it, without adding it to the
+/// level's entity list). One per level, never destroyed (its display entity is removed instead).
+class CarrySpawner : public BaseMobSpawner {
+public:
+    explicit CarrySpawner(ActorDefinitionIdentifier const& id) : BaseMobSpawner(id) {}
+    ~CarrySpawner() override = default;
+    void             tick(BlockSource&) override {}
+    void             load(CompoundTag const&) override {}
+    void             save(CompoundTag&) override {}
+    BlockPos const&  getPos() override { return mAt; }
+    BlockPos         mAt;
+};
+
 /// The cached render state of the local player's carry.
 struct Cache {
     std::optional<CarryData>     data;   ///< the carry the cache was built for
@@ -132,6 +157,8 @@ struct Cache {
     ItemStack                    item;                ///< block / item visual
     std::optional<WeakEntityRef> entity;              ///< entity visual: a client-only display actor
     Level*                       level     = nullptr; ///< the level that owns the display actor
+    CarrySpawner*                spawner   = nullptr; ///< builds the display actor (of `spawnerLevel`)
+    Level*                       spawnerLevel = nullptr;
     int                          dimension = -1;      ///< the dimension the display actor lives in
     bool                         logged    = false;
 };
@@ -181,7 +208,7 @@ Vec3 parkPos(LocalPlayer& player) {
 void releaseActor(bool levelAlive) {
     auto& c = cache();
     if (c.entity.has_value()) {
-        if (levelAlive && c.level && cachedActor()) c.level->removeDisplayEntity(*c.entity);
+        if (levelAlive && c.spawner && c.spawnerLevel == c.level && cachedActor()) c.spawner->removeDisplayEntity();
         c.entity.reset();
     }
     c.level     = nullptr;
@@ -207,33 +234,74 @@ void zeroRotations(Actor& actor) {
     if (actor.hasCategory(ActorCategory::Mob)) static_cast<Mob&>(actor).setYBodyRotations(0.f, 0.f);
 }
 
-/// A client-only display actor of the carried entity's type (SPEC §4.1): rotations zeroed, hurt time
-/// 0, no name tag, no leash. It waits above the build limit and is drawn only by us.
-/// Limitation: the rest of the carried NBT (variant, colour, age...) is not applied; `Actor::load`
-/// on a client display actor crashes the game, and the client factory's `loadActor` refuses.
-/// KNOWN GAP: `ActorRenderDispatcher::render` draws nothing for this actor yet (its AABB is still the
-/// 0.6 x 1.8 default, so the actor is probably not initialised from its definition).
+/// Applies the parts of the carried NBT that change how an entity looks (variant, colours, baby,
+/// saddle, shorn wool, chest, tamed) through the actor's synched data, as the server would send them.
+void applyLook(Actor& actor, CompoundTag const& tag) {
+    auto& data = actor.mEntityData;
+    auto  intOf = [&](char const* key) -> std::optional<int> {
+        if (!tag.contains(key)) return std::nullopt;
+        auto const& t = tag.at(key);
+        if (t.hold(Tag::Byte)) return static_cast<int>(t.get<ByteTag>().data);
+        if (t.hold(Tag::Short)) return static_cast<int>(t.get<ShortTag>().data);
+        if (t.hold(Tag::Int)) return t.get<IntTag>().data;
+        return std::nullopt;
+    };
+    std::vector<std::unique_ptr<DataItem>> items;
+    auto id = [](ActorDataIDs i) { return static_cast<DataItem::ID>(i); };
+    if (auto v = intOf("Variant")) items.push_back(DataItem::create(id(ActorDataIDs::Variant), int{*v}));
+    if (auto v = intOf("MarkVariant")) items.push_back(DataItem::create(id(ActorDataIDs::MarkVariant), int{*v}));
+    if (auto v = intOf("Color")) items.push_back(DataItem::create(id(ActorDataIDs::ColorIndex), static_cast<schar>(*v)));
+    if (auto v = intOf("Color2")) items.push_back(DataItem::create(id(ActorDataIDs::Color2Index), static_cast<schar>(*v)));
+    auto flags = data->getInt64(static_cast<ushort>(ActorDataIDs::Reserved0));
+    auto flag  = [&](char const* key, ActorFlags f) {
+        auto v = intOf(key);
+        if (!v) return;
+        auto bit = std::int64_t{1} << static_cast<int>(f);
+        flags    = *v ? (flags | bit) : (flags & ~bit);
+    };
+    flag("IsBaby", ActorFlags::Baby);
+    flag("Saddled", ActorFlags::Saddled);
+    flag("Sheared", ActorFlags::Sheared);
+    flag("Chested", ActorFlags::Chested);
+    flag("IsTamed", ActorFlags::Tamed);
+    items.push_back(DataItem::create(id(ActorDataIDs::Reserved0), static_cast<int64>(flags)));
+    // The same path as a SetActorDataPacket from the server.
+    data->assignValues(items, actor, std::nullopt);
+}
+
+/// A client-only display actor of the carried entity (SPEC §4.1), built by a never-placed mob
+/// spawner so it is initialised from its definition like the mob in a spawner. Its look comes from
+/// the NBT (`applyLook`); rotations zeroed, hurt time 0, no name tag, no leash. `Actor::load` is not
+/// used: it crashes on a client display actor.
 void buildActor(LocalPlayer& player, std::string const& snbt) {
     auto& c     = cache();
     auto* level = currentClient() ? currentClient()->getLevel() : nullptr;
     if (!level) return;
     auto id = carry::entityIdOf(snbt);
     if (id.empty()) return;
-    auto park = parkPos(player);
-    auto owner =
-        level->getActorFactory().clientCreateDisplayActor(ActorDefinitionIdentifier(id), &player, park, Vec2{0.f, 0.f});
-    if (!owner) {
+    ActorDefinitionIdentifier def(id);
+    if (!c.spawner || c.spawnerLevel != level) {
+        c.spawner      = new CarrySpawner(def); // the old level's spawner (if any) is abandoned with its level
+        c.spawnerLevel = level;
+    } else {
+        c.spawner->removeDisplayEntity();
+        c.spawner->setEntityId(def);
+    }
+    auto const& pos = player.getPosition();
+    c.spawner->mAt  = BlockPos{static_cast<int>(std::floor(pos.x)), static_cast<int>(std::floor(pos.y)),
+                               static_cast<int>(std::floor(pos.z))};
+    Actor* actor    = c.spawner->tryGetOrCreateDisplayEntity(player.getDimensionBlockSource());
+    if (!actor) {
         log().warn("firstperson: cannot create a display actor for {}", id);
         return;
     }
-    WeakEntityRef weak  = owner->getWeakRef();
-    auto*         actor = level->addDisplayEntity(player.getDimensionBlockSource(), std::move(owner));
-    if (!actor) return;
-    c.entity    = weak;
+    c.entity    = actor->getEntityContext().getWeakRef();
     c.level     = level;
     c.dimension = static_cast<int>(player.getDimensionId());
+    if (auto tag = carry::parseNbt(snbt)) applyLook(*actor, *tag);
     actor->setNameTag("");
     zeroRotations(*actor);
+    actor->_setPos(parkPos(player));
 }
 
 void rebuild(CarryData const& data, LocalPlayer& player) {
