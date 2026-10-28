@@ -141,6 +141,33 @@ void ensureAnimations(Level& level) {
             after = loaded(ap::kNativeAnimation);
         }
     }
+    // TEMPORARY diagnostics: which variants parse?
+    struct Variant {
+        char const* name;
+        char const* engine;
+        std::string json;
+    };
+    auto wrap = [](char const* fmt, std::string const& body) {
+        return std::string("{\"format_version\":\"") + fmt + "\",\"animations\":{" + body + "}}";
+    };
+    std::string constBody = "\"animation.liftoff.t.NAME\":{\"loop\":true,\"bones\":{\"rightarm\":{\"rotation\":[-90.0,0.0,0.0]}}}";
+    auto named = [&](char const* n) {
+        auto s = constBody;
+        s.replace(s.find("NAME"), 4, n);
+        return s;
+    };
+    std::vector<Variant> variants{
+        {"c18e2140", "1.21.40", wrap("1.8.0", named("c18e2140"))},
+        {"c110e2140", "1.21.40", wrap("1.10.0", named("c110e2140"))},
+        {"c18e180", "1.8.0", wrap("1.8.0", named("c18e180"))},
+        {"none", "1.21.40", wrap("1.8.0", "\"animation.liftoff.t.none\":{\"loop\":true,\"bones\":{}}")},
+        {"expr", "1.21.40", wrap("1.8.0", "\"animation.liftoff.t.expr\":{\"loop\":true,\"bones\":{\"rightarm\":{\"rotation\":[\"(v.is_first_person || q.is_swimming || q.is_gliding) ? 0.0 : -this + -57.2958 - q.is_sneaking * 28\",0.0,0.0]}}}")},
+    };
+    for (auto const& v : variants) {
+        PackStats stats{};
+        group->loadActorAnimation(v.json, Core::Path("animations/liftoff_probe.animation.json"), stats, MinEngineVersion::fromString(v.engine), CurrentCmdVersion::Latest, false, "");
+        log().info("armpose: probe variant {} parsed {}", v.name, loaded((std::string("animation.liftoff.t.") + v.name).c_str()));
+    }
     log().info(
         "armpose: arm animations in the client animation group (bones): before {}, after {}, right.x.0 {}, vanilla zombie {}",
         before,

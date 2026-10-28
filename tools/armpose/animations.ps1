@@ -78,7 +78,9 @@ $native = foreach ($p in @(@('right', 'r'), @('left', 'l'))) {
     }
 }
 Add-Anim 'animation.liftoff.carry.native' ($native -join ', ')
-$anims.Add('    "animation.liftoff.carry.none": {"loop": true, "bones": {}}')
+# An animation without bones is rejected by the client, and a rejected entry drops the whole file:
+# the empty animation adds 0 to one bone.
+$anims.Add('    "animation.liftoff.carry.none": {"loop": true, "bones": {"rightarm": {"rotation": [0.0, 0.0, 0.0]}}}')
 
 $text = "{`n  `"format_version`": `"1.8.0`",`n  `"animations`": {`n" + ($anims -join ",`n") + "`n  }`n}`n"
 New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
