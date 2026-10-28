@@ -1,9 +1,12 @@
 #include "feature/carry/Feedback.h"
 
+#include <memory>
 #include <string>
 
 #include "mc/deps/core/math/Vec3.h"
 #include "mc/deps/shared_types/legacy/LevelSoundEvent.h"
+#include "mc/network/MinecraftPacketIds.h"
+#include "mc/network/MinecraftPackets.h"
 #include "mc/network/packet/AnimatePacket.h"
 #include "mc/network/packet/PlaySoundPacket.h"
 #include "mc/world/actor/Actor.h"
@@ -19,6 +22,16 @@
 
 namespace lo::feature::carry {
 
+namespace {
+/// A packet made by the game's own factory. `AnimatePacket pkt;` / `PlaySoundPacket pkt;` leave
+/// `mSerializationMode` uninitialised (no constructor sets it), and the garbage mode makes the
+/// packet unreadable: real clients are disconnected ("An error has occurred").
+template <class T>
+std::shared_ptr<T> makePacket(MinecraftPacketIds id) {
+    return std::static_pointer_cast<T>(MinecraftPackets::createPacket(id));
+}
+} // namespace
+
 void playBlockSound(Player& player, BlockPos const& pos, Block const& block, BlockSound which) {
     auto type = which == BlockSound::Hit ? SharedTypes::Legacy::LevelSoundEvent::Hit
                                          : SharedTypes::Legacy::LevelSoundEvent::Place;
@@ -26,7 +39,8 @@ void playBlockSound(Player& player, BlockPos const& pos, Block const& block, Blo
 }
 
 void playSound(int dimension, Vec3 const& pos, std::string_view name, float volume, float pitch) {
-    PlaySoundPacket pkt;
+    auto  ptr = makePacket<PlaySoundPacket>(MinecraftPacketIds::PlaySound);
+    auto& pkt = *ptr;
     pkt.mName                     = std::string(name);
     pkt.mPos                      = BlockPos{
         static_cast<int>(pos.x * 8.0f),
@@ -50,7 +64,8 @@ void playAmbient(Actor& actor) { actor.playAmbientSound(); }
 
 void swing(Player& player) {
     player.swing(ActorSwingSource::Interact, HandSlot::Mainhand);
-    AnimatePacket pkt;
+    auto  ptr = makePacket<AnimatePacket>(MinecraftPacketIds::Animate);
+    auto& pkt = *ptr;
     pkt.mRuntimeId   = player.getRuntimeID();
     pkt.mAction      = AnimatePacketPayload::Action::Swing;
     pkt.mData        = 0.0f;
