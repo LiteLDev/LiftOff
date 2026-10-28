@@ -7,4 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The carry spine: Carry On's configuration, lists, per-player carry state, block and entity capture, and the client/server protocol.
+
 [Unreleased]: https://github.com/LiteLDev/LiftOff/commits/main

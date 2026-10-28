@@ -16,12 +16,14 @@ should match the wording of Carry On (they are behaviour), written into our own 
 
 | Path | What it is |
 | ---- | ---------- |
-| `src/core/` | Pure C++ (no `mc/`/`ll/` includes): `Format.h` (translation formatting), `Glob.h`, `GlobalPos.h`. Static lib `lo-core`, unit-tested in `tests/`. |
-| `src/game/` | Game adapters: `WorldDb` (LevelDB JSON + world lifecycle), `Blocks` (states, placement, positions). |
+| `src/core/` | Pure C++ (no `mc/`/`ll/` includes): `Format.h` (translation formatting), `Glob.h`, `GlobalPos.h`, `CarryLists.h` (list entries), `CarryMath.h` (Slowness, reach). Static lib `lo-core`, unit-tested in `tests/`. |
+| `src/game/` | Game adapters: `WorldDb` (LevelDB JSON + world lifecycle), `Blocks` (states, placement, positions), `Items` (`makeItem`). |
 | `src/client/` | Client side (client build only, files wrapped in `#ifdef LO_CLIENT`): `Client.h` (client instance, local player, `ctr`). |
 | `src/mod/` | Entry (`Main.cpp`), `Log.h`, `Module.h`, `Config.h`, `ModConfig.h`, `I18n.h`, `Commands.h`, `Registry.h`. |
 | `src/selftest/` | In-game test framework (`SelfTest.h`) and the foundation tests. |
 | `src/pack/` | `PackDeployer` (BDS: puts the resource pack on the world). |
+| `src/feature/carry/` | The carry spine (U0): the shared contracts every unit builds on (see *Carry contracts* below). |
+| `src/net/` | `CarryProtocol` (U0): client <-> server packets and the client mirror of every carry. |
 | `src/feature/<unit>/` | Feature units (gameplay, server side; may contain `#ifdef LO_CLIENT` parts). |
 | `assets/lang/<locale>/<unit>.json` | Mod translations (server + client mod text), merged into `lang/<locale>.json`. |
 | `assets/pack/bp/` | Behavior pack: `blocks/`, `items/`, `recipes/`, `loot_tables/`, `manifest.json`. |
@@ -59,6 +61,9 @@ reference it with `tr(key, "English fallback")` without defining it.
 | `LO_REGISTER_CONFIG("section", T)` | `mod/Config.h` | Reflectable struct with `int version`; file `config/<section>.json`; `lo::config::get<T>()`. One section per unit. |
 | `LO_REGISTER_SUBCOMMAND(fn)` | `mod/Commands.h` | Adds overloads to `/carryon` (alias `/liftoff`). `commands::playerOf`, `commands::isAdmin`. |
 | `LO_REGISTER_SELFTEST("unit.case", fn)` | `selftest/SelfTest.h` | `fn(Context&)` or `ll::coro::CoroTask<>(Context&)`. |
+| `LO_REGISTER_PICKUP_HOOKS(PickupHooks{...})` | `feature/carry/Hooks.h` | Pickup / placement stages: `overrideChecks`, `customCondition`, `protection`, `beforePickup`, `placeProtection`, `onPlace`, `onLoop` (scripts, custom conditions, land protection). |
+| `LO_REGISTER_VISUAL_PROVIDER(VisualProvider{...})` | `feature/carry/Hooks.h` | Changes what is drawn for a carry (`CarryVisual`: block / item / entity, transform, arms). |
+| `LO_REGISTER_DEBUG_LINES(fn)` | `feature/carry/Hooks.h` | Extra lines of `/carryon debug`. |
 
 Registrations live in .cpp files linked directly into the DLL, so they are never stripped.
 
@@ -80,6 +85,35 @@ Registrations live in .cpp files linked directly into the DLL, so they are never
   `/carryon selftest` (no glob) and the server scenario `full` run every unit's tests together:
   keep them passing there.
 
+## Carry contracts (U0 spine)
+
+Namespace `lo::feature::carry` (headers in `src/feature/carry/`) unless noted; server thread unless noted.
+`docs/SPEC.md` says which unit uses what and in which order (§3 check orders, §9 work plan). Each header
+has usage examples at the top.
+
+| Header | Key API | Used by |
+| ------ | ------- | ------- |
+| `CarryConfig.h` | `CarryConfig` (`config/carryon.json`: `settings`, `whitelist`, `blacklist`, `customPickupConditions`), `CarryClientConfig` (`config/carryon_client.json`: `settings`, `modelOverrides`): `lo::config::get<CarryConfig>().settings.maxDistance` | all |
+| `CarryData.h` | `CarryData{type, block, blockEntity, entity, player, keyPressed, activeScript, scriptRender, selected, tick}` (NBT as SNBT text), `toJson` / `fromJson`, `clear()`, `nbtSize()` | all |
+| `CarryStore.h` | `get(p)`, `isCarrying(p)`, `set(p, data)` (refreshes `selected` + `tick`, persists `lo:carry:<uuid>`, syncs modded clients), `clear(p)`, `tickCount(p)`, `canAct(p)` (tick guard), `keyPressed(p)` / `setKeyPressed` / `resetKeyPressed`, `onCarryChanged(fn(p, old, new))`, `forEachCarrier(fn)` | all |
+| `Checks.h` | `canStartPickup(p, target, entity)` (distance with reach scale, game mode, both hands empty, not carrying, tick guard, key), `gameType(p)`, `isCreative(p)`, `isDoubleHeight(block)`, `isUnbreakable(block)`, `isBedrockOnlyBlockActor(id)` | U1, U3 |
+| `Lists.h` | `isBlockAllowed(block)`, `isEntityAllowed(actor)`, `isStackingAllowed(actor)`, `isBlockIdAllowed(id)`, `isEntityIdAllowed(id)`, `isPlacementException(state)`, `blockStateValue(block, name)`, `blockCandidate` / `entityCandidate` (match your own `core::carry::ListEntry`s, U8 / U12) | U1–U4, U8, U12 |
+| `Slowness.h` | `blockAmplifier(data)`, `entityAmplifier(entity, carrier)`, `playerAmplifier()`, `applySlowness(p, amp)` (honours `slownessInCreative`), `removeSlowness(p)`, `slownessAmplifier(p)`, `entityHeight` / `entityWidth`, `playerScale` | U1, U3–U7 |
+| `Capture.h` | `captureBlock(region, pos)` -> `{block, blockEntity}` SNBT, `removeCarriedBlock(region, pos)` (unpairs chests, empties containers, keeps water, no drops), `restoreBlock(region, pos, data, state, waterlog)` (block actor rebuilt at the new position, chests re-paired, sent to clients), `carriedBlock(data)`, `carriedBlockId(data)`, `captureActor(actor)`, `removeCapturedActor(actor)` (no death, no drops, lead dropped), `spawnActor(region, pos, snbt)` (keeps the UniqueID), `entityIdOf(snbt)`, `toSnbt` / `parseNbt` | U1–U4, U7 |
+| `PlaceCarried.h` | `placeCarried(p)`, `placeCarriedAt(p, region, pos)` (death / command placement: ±14 cube search, fallback overwrite; clears the carry and removes Slowness), `canPlaceBlockAt(region, pos, block)`, `isObstructed(region, pos, block)` | U2, U5–U7 |
+| `Hooks.h` | stage aggregates `overrideChecks(t)`, `customConditions(t)`, `protectionAllows(t)` (publishes `PlayerDestroyBlockEvent`), `beforePickup(t, data)`, `placeAllowed(t, block)` (publishes `PlayerPlacingBlockEvent`), `runOnPlace(p, data)`; `inProtectionCheck()`; `setPlacementStateResolver(fn)` / `resolvePlacementState(...)` (U2 installs the §3.6 rules); `visualFor(data)` -> `CarryVisual`; `extraDebugLines(p, data)` | U1–U4, U6–U8, U10–U13 |
+| `Feedback.h` | `playBlockSound(p, pos, block, BlockSound::Hit/Place)`, `playSound(actor or dim + pos, name, volume, pitch)`, `sound::kArmorEquip` / `kLavaPop` / `kHorseSaddle`, `playAmbient(actor)`, `swing(p)` | U1–U4 |
+| `net/CarryProtocol.h` (`lo::net`) | `isModded(p)`, `onModdedJoined(fn)`, `sendCarrySync(carrier)` (automatic on every store change), `sendCarrySyncTo`, `sendStartRiding(to, entity, ride)`, `broadcastStartRidingOther(mount, rider, ride)`; test seams `setTestModded`, `takeTestMessages`, `injectFromClient`. Client build (`lo::client::carry`, client thread): `carriedOf(uniqueId)`, `localData()`, `serverHasMod()`, `sendKeyPressed(bool)`, `onSync`, `onStartRiding`, `onStartRidingOther`, `onConnected` | U3–U6, U9–U13 |
+| `core/CarryLists.h`, `core/CarryMath.h` (`lo::core::carry`) | `parseEntry`, `wildcardMatch`, `IdList`, `isAllowed`, `StateExceptions`, `splitSpec` (for `(stage)` / `{nbt}->target` suffixes), `parseStateFilters`; `blockSlowness`, `entitySlowness`, `reachScale`, `withinReach` | U8, U12 (their own formats) |
+
+Rules of the spine:
+- Read and write a player's carry only through `CarryStore`; never keep a `CarryData const&` across calls.
+- Every pickup / placement goes through the `Hooks` stages in the SPEC order, so scripts and protection
+  plugins see every unit the same way. Ignore synthetic events while `inProtectionCheck()`.
+- Never send LiftOff packets yourself; use the `net` functions (they skip vanilla clients).
+- SimulatedPlayers are vanilla clients: selftests use `carry::setKeyPressed(p, true)` / `resetKeyPressed`,
+  and `net::setTestModded` to see the packets a modded client would get.
+
 ## Build, test, run
 
 In a fresh pwsh refresh PATH first (the build script does this and adds LLVM if needed):
@@ -88,7 +122,7 @@ In a fresh pwsh refresh PATH first (the build script does this and adds LLVM if 
 ```powershell
 pwsh tools/build.ps1 -Target all -Tests     # bin/server/LiftOff + bin/client/LiftOff + gtest
 pwsh tools/build.ps1 -Target server -Tests  # one platform + unit tests
-xmake build -y lo-tests; xmake run lo-tests
+xmake build -P . -y lo-tests; xmake run -P . lo-tests
 pwsh -NoProfile -File tools/e2e/server/run.ps1 -Scenario smoke       # BDS (4 slots, waits for a free one)
 pwsh -NoProfile -File tools/e2e/client/run.ps1 -Scenario smoke       # headless client via LeviHeadlessInput
 ```
@@ -130,6 +164,14 @@ Deploying by hand: copy `bin/server/LiftOff` to `<BDS>/plugins/`, or `bin/client
 - A cancelled `PlayerInteractBlockEvent` rolls back block changes made during it: defer world edits
   to the next tick (`ll::coro` / `ServerLevelTickEvent`).
 - Don't keep `Player*` across ticks; store `getOrCreateUniqueID()` / the UUID and look it up again.
+- `ll::TypedStorage<..., T>` of a trivial type (int, float, bool, pointers) *is* `T`: no `.get()`.
+- A Bedrock large chest is one 54-slot container on both halves (`BlockSource::tryGetContainer`): slots 0-26
+  live in the lead half, 27-53 in the other; each half's NBT holds its own 27 slots.
+- `BlockSource::spawnActor(nbt)` gives the actor a new UniqueID; `carry::spawnActor` keeps it
+  (`ActorFactory::loadActor` with `DefaultDataLoadHelper` + `Level::addEntity`).
+- `BlockActor::create(nbt, pos)` returns null for vanilla chests; `BlockActor::loadStatic(blockType, ...)` works.
+- Worktrees nested in the main checkout: xmake prefers the parent's `.xmake`, so `tools/build.ps1` passes
+  `-P <repo>`. Run raw xmake commands with `-P .` too.
 
 ## Conventions
 
@@ -144,4 +186,5 @@ Deploying by hand: copy `bin/server/LiftOff` to `<BDS>/plugins/`, or `bin/client
 
 ## Out of scope
 
-To be filled in with docs/SPEC.md: Carry On features with no Bedrock equivalent.
+See `docs/SPEC.md` §8: the Cloth config screen, Game Stages (player tags `carryon:stage:<name>` instead),
+advancements (script condition always passes), data-pack tags, first-person body mod compatibility.

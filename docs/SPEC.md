@@ -11,7 +11,9 @@ Conventions in this document:
 - **[INF]** marks behaviour inferred from Carry On's code paths rather than stated explicitly. Implement it as written.
 - **[LO]** marks a LiftOff decision where Bedrock has no direct equivalent.
 - Contract names (`CarryStore`, `Checks`, `Capture`, `Hooks`, `Feedback`, `Slowness`, `Lists`, `PlaceCarried`, `net::...`)
-  refer to the spine (U0) headers under `src/feature/carry/`, `src/core/` and `src/net/`.
+  refer to the spine (U0) headers under `src/feature/carry/`, `src/core/` and `src/net/`. `Header::fn` means the free
+  function `lo::feature::carry::fn` declared in `src/feature/carry/Header.h` (`net::fn`: `lo::net::fn` in
+  `src/net/CarryProtocol.h`). AGENTS.md lists the signatures.
 - "Carrier" = the player who carries; "carry" = the player's `CarryData` record.
 - Volumes/pitches are Java values; amplifiers are 0-based (0 = Slowness I).
 
@@ -26,7 +28,7 @@ slot, cannot use items or open containers, and cannot break blocks or attack.
 (b) renders. A player's carry is one `CarryData` record (type `Invalid|Block|Entity|Player`, block state SNBT,
 block-entity SNBT, entity SNBT, carried player UUID, `keyPressed`, active script, locked hotbar slot `selected`,
 `tick` = carrier tick count at the last change). It is persisted in the world DB under `lo:carry:<uuid>`
-(loaded on join, saved on change, autosave and leave). Every `CarryStore::set` refreshes `selected` to the
+(loaded on first use, written on every change, erased when cleared). Every `CarryStore::set` refreshes `selected` to the
 current slot and `tick` to the current tick. **Tick guard**: no pickup/placement/stacking action is taken in the
 same carrier tick as the last carry change (`CarryStore::canAct`), so a pickup and a placement can never happen on
 the same click.
@@ -75,14 +77,14 @@ Then, in this order (first failure ends the attempt **silently**: no sound, no m
 3. Capture the block actor NBT if the block has one (`Capture::captureBlock`).
 4. If `useScripts`: find the matching script (§3.12, highest priority first). Remember its `override_checks`.
 5. **Block lists**: `Lists::isBlockAllowed(block)` (blacklist, or whitelist when `useWhitelistBlocks`). Never overridable.
-6. **Double-height** blocks are refused: any block with the `upper_block_bit` state (doors, sunflower, lilac,
+6. **Double-height** blocks are refused (`Checks::isDoubleHeight`): any block with the `upper_block_bit` state (doors, sunflower, lilac,
    rose_bush, peony, tall_grass, large_fern, small_dripleaf_block, pitcher_plant, pitcher_crop) and
    `minecraft:seagrass` with `sea_grass_type` ≠ `default` (tall seagrass). Never overridable.
-7. **Unbreakable** (destroy speed < 0) refused when the player is not in creative and `pickupUnbreakableBlocks` is
+7. **Unbreakable** (destroy speed < 0, `Checks::isUnbreakable`) refused when the player is not in creative and `pickupUnbreakableBlocks` is
    false. Skipped by `override_checks`.
 8. **No block entity** refused unless `pickupAllBlocks`. Skipped by `override_checks`. "Has a block entity" means
    the Java notion: Bedrock-only block actors do **not** count. [LO] These blocks are treated as having no block
-   entity for this check (their actor NBT is still captured when they are picked up):
+   entity for this check (`Checks::isBedrockOnlyBlockActor`; their actor NBT is still captured when they are picked up):
    `minecraft:flower_pot`, `minecraft:noteblock`, `minecraft:cauldron`, `minecraft:piston`,
    `minecraft:sticky_piston`, `minecraft:lodestone`, `minecraft:netherreactor`.
 9. **Locked** containers refused: the block actor NBT contains a `Lock` key (any value).
@@ -98,7 +100,9 @@ Then, in this order (first failure ends the attempt **silently**: no sound, no m
     water in the liquid layer, and it stays in the world (like Java forcing `waterlogged=false` and the fluid staying).
     Block actor saved with its id (`Capture`).
 14. Remove the block actor, then the block (`Capture::removeCarriedBlock`): a paired chest is unpaired first (the
-    other half becomes a single chest and keeps its own items; each half carries only its own inventory), the
+    other half becomes a single chest and keeps its own items; each half carries only its own inventory — on
+    Bedrock a large chest is one 54-slot container on both halves, slots 0–26 stored in the lead half and 27–53 in
+    the other, and each half's NBT holds its own 27 slots), the
     container is emptied without drops, the block becomes air (or water if it held water). Nothing drops.
 15. Play the block's **hit** sound at the block (volume 1.0, pitch 0.5, everyone nearby); swing the main hand.
 16. Apply Slowness (§3.4) unless the player is in creative and `slownessInCreative` is false.
@@ -258,7 +262,8 @@ Because a cancelled `PlayerInteractBlockEvent` rolls back block changes, the pla
 
 1. Carrying a block and the tick guard passes.
 2. Target: the clicked position if that block is replaceable (`canBeBuiltOver`), else the neighbour on the clicked face.
-3. **Placement state**: `getPlacementBlock` of the carried block for the target with the clicked face and the click
+3. **Placement state** (U2 implements it and installs it with `Hooks::setPlacementStateResolver`, so that
+   `PlaceCarried` uses the same rules): `getPlacementBlock` of the carried block for the target with the clicked face and the click
    position = **the player's feet position** (relative to the target, unclamped).
    [QUIRK] Java uses a miss hit at the player's position, so where on the face you click does not affect slab /
    stair / trapdoor halves (only the player's height relative to the target does). **Decision**: reproduce.
@@ -292,7 +297,7 @@ Because a cancelled `PlayerInteractBlockEvent` rolls back block changes, the pla
 4. **Can place** iff: the block can survive at the target (`mayPlace`), the player may build there (build ability,
    not Adventure without permission), the target is replaceable, and no entity that blocks building (mobs,
    players incl. the placer, boats, minecarts, armor stands; not items, XP orbs, projectiles) intersects the
-   block's collision shape. Failure: sound `lava.pop` (0.5, 0.5) at the player, nothing else.
+   block's collision shape. Failure: sound `liquid.lavapop` (0.5, 0.5) at the player, nothing else.
 5. **Protection**: the built-in hook publishes a cancellable `PlayerPlacingBlockEvent` (inside
    `inProtectionCheck()`); registered hooks may veto. Vetoed → refused silently.
 6. Target outside the dimension's height range → refused silently.
@@ -309,7 +314,7 @@ Because a cancelled `PlayerInteractBlockEvent` rolls back block changes, the pla
 Trigger: use-block while carrying an entity or a player (cancelled; executed next tick like §3.6).
 
 1. Target: clicked position, or its neighbour on the clicked face if the clicked block is not replaceable; if that
-   is still not replaceable → `lava.pop` (0.5, 0.5) at the player, stop.
+   is still not replaceable → `liquid.lavapop` (0.5, 0.5) at the player, stop.
 2. Position = bottom centre of the target block (`x+0.5, y, z+0.5`). No collision check.
 3. **Carried player**: carrier ejects passengers, `StartRidingOther{false}` to modded clients / link removed, carry
    cleared, the carried player is teleported to the position. Swing, Slowness removed. No `commandPlace`.
@@ -325,10 +330,10 @@ Trigger: interact with an entity while carrying an entity or a player (interacti
 1. Requires `stackableEntities`. Held entity = the carried entity (spawned from NBT), or the carrier's first
    passenger when carrying a player.
 2. From the clicked entity's root vehicle, count the passengers up the first-passenger chain; the count must be
-   `< maxEntityStackLimit − 1` (default: < 9, i.e. a column of at most 10). Else `lava.pop` (0.5, 0.5), stop.
+   `< maxEntityStackLimit − 1` (default: < 9, i.e. a column of at most 10). Else `liquid.lavapop` (0.5, 0.5), stop.
 3. Top entity = the highest entity of that chain. If it is the held entity → nothing.
 4. Top entity must pass the stacking lists (`Lists::isStackingAllowed`); else nothing (silent).
-5. If `entitySizeMattersStacking`: held `h × w` must be ≤ top `h × w`; else `lava.pop` (0.5, 0.5), stop.
+5. If `entitySizeMattersStacking`: held `h × w` must be ≤ top `h × w`; else `liquid.lavapop` (0.5, 0.5), stop.
 6. If the top entity is a `minecraft:horse`, it becomes tamed (only reachable in whitelist mode: horses are in the
    default stacking blacklist).
 7. If the squared block distance between the clicked entity and the player is < 6: the held entity is spawned
@@ -349,13 +354,14 @@ All played through `Feedback`. Every successful pickup, placement or stacking al
 | Block pickup | block's hit sound | `LevelSoundEvent::Hit` with the block's runtime id | 1.0 | 0.5 | everyone near the block |
 | Entity/player pickup | `item.armor.equip_generic` | `armor.equip_generic` | 1.0 | 0.5 | everyone near the carrier |
 | Block placed | block's place sound | `LevelSoundEvent::Place` with the block's runtime id | 1.0 | 0.5 | everyone incl. placer, once |
-| Placement/stacking failed | `block.lava.pop` | `lava.pop` | 0.5 | 0.5 | everyone near the player |
+| Placement/stacking failed | `block.lava.pop` | `liquid.lavapop` | 0.5 | 0.5 | everyone near the player |
 | Entity stacked | `entity.horse.saddle` | `mob.horse.leather` | 0.5 | 1.5 | everyone near the player |
 | Entity placed | mob ambient | `Actor::playAmbientSound()` | mob's | mob's | everyone |
 
-Known gap (U0 follow-up): `LevelSoundEvent` carries no pitch, so block hit/place currently use the client's
-definition pitch instead of 0.5. The target is pitch 0.5 (e.g. `PlaySoundPacket` with `hit.<sound type>` /
-the place sound name of the block's sound type).
+Known limitation [LO]: the block's hit/place sound is chosen by the client from the block (`LevelSoundEvent` with the
+block's runtime id; the server does not know vanilla block sound names), and `LevelSoundEvent` carries no pitch:
+the client's own volume/pitch for that block sound is used instead of 1.0/0.5. Named sounds (`PlaySoundPacket`)
+use Carry On's exact volume and pitch.
 
 ### 3.10 Custom pickup conditions (U8)
 
@@ -460,7 +466,7 @@ blacklist is ignored. Entry syntax §5.3.
 
 Carry On has no GUI screens except its Cloth Config screen, which is **not ported** (edit the JSON files and run
 `/carryon reload`). There is no HUD element, tooltip or chat message; every failed pickup or placement is silent
-(except the `lava.pop` sounds of §3.6–3.8). This section specifies the rendering.
+(except the `liquid.lavapop` sounds of §3.6–3.8). This section specifies the rendering.
 
 ### 4.1 What is drawn
 
@@ -691,8 +697,8 @@ other ops has no Bedrock equivalent [LO]. Log `carry: cleared <player>` / `carry
 at <x> <y> <z> (command)`.
 
 The `Override Model:` and `Custom Pickup Condition:` lines come from U12 and U8: U7 provides a small provider
-registry for debug lines (`feature/carry/DebugLines.h`, owned by U7, extension of the contracts); U8 and U12
-register their providers once U7 has merged. Without a provider the lines are omitted. On BDS there is no client
+the spine's debug-line registry (`LO_REGISTER_DEBUG_LINES` in `feature/carry/Hooks.h`, U0); U8 and U12 register
+their providers, U7 prints `carry::extraDebugLines(player, data)` after its own lines. Without a provider the lines are omitted. On BDS there is no client
 config, so `Override Model:` never appears there (as on a Java dedicated server).
 
 ## 7. Strings
@@ -764,14 +770,14 @@ All units depend only on U0 and are independent of each other. Selftest `dx` ran
 
 | Unit | Name | dx | Scope | Contracts used |
 | --- | --- | --- | --- | --- |
-| U0 | spine | 0–99 | Done: `CarryLists`, `CarryMath` (core), `CarryConfig` / `CarryClientConfig`, `CarryData`, `CarryStore`, `Checks`, `Slowness`, `Lists`, `Capture`, `PlaceCarried`, `Hooks` (+ visual registry), `Feedback`, `net::CarryProtocol` + client mirror. Follow-ups: list state filters (§5.3), Java-parity block-actor list (§3.1 step 8), block sound pitch (§3.9). | — |
+| U0 | spine | 0–99 | Done: `CarryLists`, `CarryMath` (core), `CarryConfig` / `CarryClientConfig`, `CarryData`, `CarryStore`, `Checks`, `Slowness`, `Lists`, `Capture`, `PlaceCarried`, `Hooks` (+ visual registry), `Feedback`, `net::CarryProtocol` + client mirror. Includes list state filters (§5.3), the Java-parity block-actor list (§3.1 step 8, `Checks::isBedrockOnlyBlockActor`), the placement state resolver seam (§3.6) and the debug-line registry (§6). Limitation: block sound pitch (§3.9). | — |
 | U1 | blockpickup | 100–199 | §3.1 | `Checks::canStartPickup`, `Lists`, `Capture`, `Hooks`, `Slowness`, `Feedback`, `CarryStore` |
 | U2 | blockplace | 200–299 | §3.6; cancels use-block while carrying a block | `Capture::restoreBlock`, `Hooks` (protection, onPlace), `Feedback`, `Slowness`, `Lists::isPlacementException`, `CarryStore` |
 | U3 | entitypickup | 300–399 | §3.2 incl. players (pickup side), hook `GameMode::$interact` | `Checks`, `Lists`, `Capture`, `Hooks`, `Slowness`, `Feedback`, `CarryStore`, `net` |
 | U4 | entityplace | 400–499 | §3.7, §3.8; cancels use-block while carrying an entity/player | `Capture::spawnActor`, `Hooks`, `Lists::isStackingAllowed`, `Feedback`, `Slowness`, `CarryStore`, `net` |
 | U5 | playercarry | 500–599 | §3.3 riding, positioning, dismount, StartRiding packets | `CarryStore`, `net`, `Slowness`, `PlaceCarried` |
 | U6 | restrictions | 600–699 | §3.4 hotbar lock (server), item pickup, pick block, use item, attack/destroy, containers (vanilla clients), `dropCarriedWhenHit` | `CarryStore`, `PlaceCarried`, `Hooks::inProtectionCheck`, `net::isModded` |
-| U7 | lifecycle | 700–799 | §3.5, §6 (`debug`, `clear`, `place`), debug-line registry | `CarryStore`, `PlaceCarried`, `Slowness`, `Hooks` |
+| U7 | lifecycle | 700–799 | §3.5, §6 (`debug`, `clear`, `place`) | `CarryStore`, `PlaceCarried`, `Slowness`, `Hooks` |
 | U8 | scripts | 800–899 | §3.12, §3.10 (scripts + custom pickup conditions), commandLoop | `Hooks` (overrideChecks, customCondition, beforePickup, onPlace, onLoop), `CarryConfig`, `core::CarryLists` |
 | U9 | clientinput | 900–999 | §4.6 key, client hotbar lock, client container close | `net::KeyPressedPacket`, client mirror |
 | U10 | firstperson | 1000–1099 | §4.2 | `CarryVisual` / `VisualProvider`, client mirror, `CarryClientConfig` |
@@ -791,4 +797,4 @@ Shared events (each unit acts only on its own case; none relies on another's hoo
 | ride/dismount, logout | U5 (release, last-passenger rule), U7 (carrier/carried player logout and death) | Both call `PlaceCarried`/`CarryStore::clear`, which are idempotent. |
 | hotbar slot, containers | U6 (server), U9 (modded client) | Independent; server is authoritative. |
 | rendering | U10, U11 draw; U12 supplies visuals; U13 arm pose + vanilla stand-ins | U13 sends stand-ins only to vanilla clients. |
-| debug lines | U7 registry; U8, U12 providers | Providers added after U7 merges. |
+| debug lines | U0 registry (`LO_REGISTER_DEBUG_LINES`); U8, U12 providers; U7 prints | Independent. |
