@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -70,6 +71,10 @@ namespace lo::client::carry {
 [[nodiscard]] feature::carry::CarryData const* carriedOf(std::int64_t uniqueId);
 /// The local player's carry (nullptr: not carrying / not in a level).
 [[nodiscard]] feature::carry::CarryData const* localData();
+/// Thread-safe copies of the same (use these from the render thread; the pointers above are for
+/// the client thread only, since a sync may replace the entry they point to).
+[[nodiscard]] std::optional<feature::carry::CarryData> carriedCopy(std::int64_t uniqueId);
+[[nodiscard]] std::optional<feature::carry::CarryData> localCopy();
 /// The server accepted our hello (it runs LiftOff).
 [[nodiscard]] bool serverHasMod();
 /// Sends the carry key state (no-op unless `serverHasMod()`).
