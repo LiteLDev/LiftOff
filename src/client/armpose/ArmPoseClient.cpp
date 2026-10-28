@@ -106,15 +106,20 @@ void ensureAnimations(Level& level) {
     static void const* done = nullptr;
     if (done == &level) return;
     done       = &level;
-    auto* group = level.mActorAnimationGroup.get();
-    if (!group) return;
+    auto* ci = client::currentClient();
+    if (!ci) return;
+    auto groupPtr = ci->getActorAnimationGroup(); // the client's group (the level's is unused on clients)
+    auto* group   = groupPtr.get();
+    if (!group) {
+        log().warn("armpose: the client has no actor animation group");
+        return;
+    }
     bool before = group->getActorAnimationInfo(HashedString(ap::kNativeAnimation)) != nullptr;
     bool vanilla = group->getActorAnimationInfo(HashedString("animation.player.move.arms.zombie")) != nullptr;
     bool after   = before;
     if (!before) {
         std::string text;
-        auto*       ci = client::currentClient();
-        if (ci && ci->getResourcePackManager().load(ResourceLocation(Core::PathView("animations/liftoff_carry.animation.json")), text)) {
+        if (ci->getResourcePackManager().load(ResourceLocation(Core::PathView("animations/liftoff_carry.animation.json")), text)) {
             PackStats stats{};
             group->loadActorAnimation(
                 text,
