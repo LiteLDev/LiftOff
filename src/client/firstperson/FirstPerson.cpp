@@ -211,6 +211,8 @@ void zeroRotations(Actor& actor) {
 /// 0, no name tag, no leash. It waits above the build limit and is drawn only by us.
 /// Limitation: the rest of the carried NBT (variant, colour, age...) is not applied; `Actor::load`
 /// on a client display actor crashes the game, and the client factory's `loadActor` refuses.
+/// KNOWN GAP: `ActorRenderDispatcher::render` draws nothing for this actor yet (its AABB is still the
+/// 0.6 x 1.8 default, so the actor is probably not initialised from its definition).
 void buildActor(LocalPlayer& player, std::string const& snbt) {
     auto& c     = cache();
     auto* level = currentClient() ? currentClient()->getLevel() : nullptr;

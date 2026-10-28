@@ -8,7 +8,8 @@
 //   block:  scale 2.5; translate (0, -0.5, -1); facePlayer != isChest ? rotate 180 Y, -8 X : +8 X;
 //           script transform; drawn as the item of the block's default state (centred on the origin)
 //   entity: rotate 180 Y; scale 0.8; translate (0, -h - 0.2, w * 1.3 + 0.1); script transform;
-//           rotate 90 Y if rotateEntitiesSideways; drawn as a client-only actor built from the NBT
+//           rotate 90 Y if rotateEntitiesSideways; drawn as a client-only display actor of the type
+//           (KNOWN GAP: the display actor is not visible yet, see FirstPerson.cpp buildActor)
 // The visual comes from `carry::visualFor(data)` (U12 model overrides / script render). Carried
 // players keep the vanilla hand (Carry On draws nothing for them in first person).
 
