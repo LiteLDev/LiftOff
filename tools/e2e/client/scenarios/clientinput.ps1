@@ -9,6 +9,8 @@
 # 3. Without the carry, the slot changes again.
 # 4. Settings > Controls lists the "Carry" key.
 # Screenshots: out/clientinput/{hud,key-held,carrying,keys-blocked,inventory-closed,uncarried,controls*}.png
+# Click positions (fractions of the 1600x900 client area) of the Controls walk.
+$script:CtlSettings = @(0.5, 0.47)   # pause menu: Settings
 Wait-LogLine 'net: the server runs LiftOff' 90 | Out-Null
 Save-Screenshot 'hud' | Out-Null
 
@@ -79,3 +81,10 @@ Press-Key '1'; Start-Sleep -Milliseconds 300
 
 $r = Invoke-SelfTest 'clientinput.*'
 if ($r.Fail -gt 0) { throw "$($r.Fail) clientinput selftest(s) failed" }
+
+# ---- 4. the Carry key in Settings > Controls (evidence only: screenshots) -----------------------------
+Focus-Game
+Press-Key ESC; Start-Sleep -Milliseconds 1200
+Save-Screenshot 'controls-0-pause' | Out-Null
+Click $script:CtlSettings[0] $script:CtlSettings[1] -Relative; Start-Sleep -Milliseconds 2500
+Save-Screenshot 'controls-1-settings' | Out-Null
