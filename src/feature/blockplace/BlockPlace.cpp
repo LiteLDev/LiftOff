@@ -254,8 +254,9 @@ PlaceResult tryPlace(Player& player, BlockPos const& clicked, int face) {
     if (!insideHeightRange(region, target)) return PlaceResult::OutsideWorld;
     // 7. commandPlace.
     carry::runOnPlace(player, data);
-    // The script may have changed or cleared the carry.
-    if (!carry::get(player).isBlock()) return PlaceResult::NotCarryingBlock;
+    // The script may have changed or cleared the carry: place only what was checked.
+    if (auto const& now = carry::get(player); !now.isBlock() || now.tick != data.tick || now.block != data.block)
+        return PlaceResult::NotCarryingBlock;
 
     // 8. Set the block. Water: setting a block that can hold water over water keeps the water in the
     // liquid layer (the game's own rule, = Java WATERLOGGED); only a source counts, like Java.
@@ -342,8 +343,8 @@ private:
         for (auto const& p : pending) {
             Player* player = level->getPlayer(p.player);
             if (!player || static_cast<int>(player->getDimensionId()) != p.dimension) continue;
-            auto const& data = carry::get(*player);
-            if (!data.isBlock() || data.tick != p.carryTick) continue;
+            bool unchanged = carry::get(*player).isBlock() && carry::get(*player).tick == p.carryTick;
+            if (!unchanged) continue;
             auto r = tryPlace(*player, p.clicked, p.face);
             if (r != PlaceResult::Placed && r != PlaceResult::CannotPlace) {
                 log().debug("carry: placement by {} not done: {}", player->getRealName(), resultName(r));
