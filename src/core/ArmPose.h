@@ -22,10 +22,10 @@
 
 namespace lo::core::armpose {
 
-inline constexpr float kBaseX   = 1.0f;  ///< arm x rotation (radians) while carrying
-inline constexpr float kCrouchX = 0.2f;  ///< added while crouching
-inline constexpr float kEntityX = 0.3f;  ///< added for entities and players
-inline constexpr float kSpreadZ = 0.05f; ///< arm z rotation (right -, left +)
+inline constexpr float kBaseX     = 1.0f;  ///< arm x rotation (radians) while carrying
+inline constexpr float kCrouchX   = 0.2f;  ///< added while crouching
+inline constexpr float kEntityX   = 0.3f;  ///< added for entities and players
+inline constexpr float kSpreadZ   = 0.05f; ///< arm z rotation (right -, left +)
 inline constexpr float kMaxOffset = 0.2f;
 
 /// Quantisation of the vanilla animations: 0.05 rad steps, indices -63..63 (about ±pi).
@@ -47,15 +47,15 @@ struct ArmOverride {
 
 /// The pose of one arm.
 struct ArmPose {
-    bool                 active = false;        ///< false: the vanilla pose (no carry or render_*_arm false)
+    bool                 active = false;          ///< false: the vanilla pose (no carry or render_*_arm false)
     std::array<float, 3> rotation{0.f, 0.f, 0.f}; ///< radians, without the crouch term
-    bool                 crouchX = false;       ///< x is computed: -0.2 more while crouching
+    bool                 crouchX = false;         ///< x is computed: -0.2 more while crouching
 
     friend bool operator==(ArmPose const&, ArmPose const&) = default;
 };
 
 struct Pose {
-    ArmPose right, left;
+    ArmPose                      right, left;
     [[nodiscard]] ArmPose const& arm(Side side) const { return side == Side::Right ? right : left; }
     friend bool                  operator==(Pose const&, Pose const&) = default;
 };

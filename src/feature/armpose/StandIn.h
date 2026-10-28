@@ -38,13 +38,13 @@ struct EntityBox {
 /// position refreshed before each send).
 struct StandIn {
     enum class Kind { None, Item, Entity };
-    Kind          kind = Kind::None;
-    std::uint64_t id   = 0;  ///< runtime id = unique id, never used by a server actor
-    std::string   actorType; ///< "minecraft:falling_block" for blocks
-    std::string   item;      ///< Kind::Item: the block shown
-    float         scale  = 1.0f;
-    float         height = 0.0f; ///< drawn height (blocks) of an entity stand-in
-    float         width  = 0.0f;
+    Kind                    kind = Kind::None;
+    std::uint64_t           id   = 0;  ///< runtime id = unique id, never used by a server actor
+    std::string             actorType; ///< "minecraft:falling_block" for blocks
+    std::string             item;      ///< Kind::Item: the block shown
+    float                   scale  = 1.0f;
+    float                   height = 0.0f; ///< drawn height (blocks) of an entity stand-in
+    float                   width  = 0.0f;
     std::shared_ptr<Packet> add;   ///< AddActorPacket
     std::shared_ptr<Packet> equip; ///< optional equipment packet (unused by the built-in stand-ins)
 
@@ -57,8 +57,8 @@ struct StandIn {
 /// Where the stand-in stands for `carrier` this tick (approximating Carry On's third-person transform,
 /// SPEC §4.3) and its yaw (degrees).
 struct Placement {
-    Vec3  pos;
-    float yaw = 0.0f;
+    Vec3        pos;
+    float       yaw                                            = 0.0f;
     friend bool operator==(Placement const&, Placement const&) = default;
 };
 [[nodiscard]] Placement placementFor(StandIn const& standIn, Player const& carrier);
@@ -67,7 +67,8 @@ struct Placement {
 void                                  moveAddPacket(StandIn const& standIn, Placement const& at);
 [[nodiscard]] std::shared_ptr<Packet> movePacket(StandIn const& standIn, Placement const& at);
 [[nodiscard]] std::shared_ptr<Packet> removePacket(std::uint64_t id);
-[[nodiscard]] std::shared_ptr<Packet> animatePacket(Player const& carrier, std::string const& animation, std::string const& controller);
+[[nodiscard]] std::shared_ptr<Packet>
+animatePacket(Player const& carrier, std::string const& animation, std::string const& controller);
 
 /// Fresh ids for stand-ins ("LO" in the high bytes; server actors count up from 1).
 [[nodiscard]] std::uint64_t nextStandInId();

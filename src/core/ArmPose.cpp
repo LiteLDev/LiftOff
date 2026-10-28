@@ -33,7 +33,13 @@ float entityRenderWidth(float width, bool sideways) { return sideways ? width - 
 
 float armOffset(float renderWidth) { return std::min((renderWidth - 1.0f) / 1.5f, kMaxOffset); }
 
-Pose computePose(bool entityOrPlayer, float renderWidth, ArmOverride const& right, ArmOverride const& left, bool renderArms) {
+Pose computePose(
+    bool               entityOrPlayer,
+    float              renderWidth,
+    ArmOverride const& right,
+    ArmOverride const& left,
+    bool               renderArms
+) {
     Pose pose;
     if (!renderArms) return pose;
     float x      = kBaseX + (entityOrPlayer ? kEntityX : 0.0f);
@@ -62,10 +68,10 @@ int quantize(float radians) {
 float dequantize(int index) { return static_cast<float>(index) * kStep; }
 
 std::string animationName(Side side, Axis axis, int index, bool crouchX) {
-    std::string name = "animation.liftoff.carry.";
-    name += sideName(side);
-    name += '.';
-    name += axisName(axis);
+    std::string name  = "animation.liftoff.carry.";
+    name             += sideName(side);
+    name             += '.';
+    name             += axisName(axis);
     if (crouchX && axis == Axis::X) name += 'c';
     name += '.';
     if (index < 0) name += 'm' + std::to_string(-index);
@@ -75,10 +81,10 @@ std::string animationName(Side side, Axis axis, int index, bool crouchX) {
 }
 
 std::string controllerName(Side side, Axis axis) {
-    std::string name = "liftoff.carry.";
-    name += sideName(side);
-    name += '.';
-    name += axisName(axis);
+    std::string name  = "liftoff.carry.";
+    name             += sideName(side);
+    name             += '.';
+    name             += axisName(axis);
     return name;
 }
 

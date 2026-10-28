@@ -52,11 +52,11 @@ ap::ArmOverride overrideOf(std::array<std::optional<float>, 3> const& rot, bool 
 
 float blockShapeWidth(std::string const& blockSnbt) {
     CarryData tmp;
-    tmp.type  = carry::CarryType::Block;
-    tmp.block = blockSnbt;
+    tmp.type          = carry::CarryType::Block;
+    tmp.block         = blockSnbt;
     auto const* block = carry::carriedBlock(tmp);
     if (!block) return 1.0f;
-    AABB buf;
+    AABB        buf;
     auto const& shape = block->getBlockType().getVisualShape(*block, buf);
     float       w     = shape.max.x - shape.min.x;
     return w > 0.0f ? w : 1.0f;
@@ -67,13 +67,16 @@ float renderWidth(CarryData const& data, CarryVisual const& visual, bool sideway
     using Kind = CarryVisual::Kind;
     if (data.isPlayer()) return ap::entityRenderWidth(kPlayerWidth, sideways);
     switch (visual.kind) {
-    case Kind::Item: return ap::blockRenderWidth(1.0f, true);
-    case Kind::Block: return ap::blockRenderWidth(blockShapeWidth(visual.block), visual.itemOverride);
+    case Kind::Item:
+        return ap::blockRenderWidth(1.0f, true);
+    case Kind::Block:
+        return ap::blockRenderWidth(blockShapeWidth(visual.block), visual.itemOverride);
     case Kind::Entity: {
         float w = entityWidth >= 0.0f ? entityWidth : entityBox(visual.entity, level).width;
         return ap::entityRenderWidth(w, sideways);
     }
-    case Kind::None: break;
+    case Kind::None:
+        break;
     }
     return 1.0f;
 }
@@ -100,12 +103,12 @@ constexpr int kMinViewChunks = 4;
 std::int64_t idOf(Actor const& a) { return a.getOrCreateUniqueID().rawID; }
 
 struct Carrier {
-    CarryData                          data;
-    int                                version = 0;
-    std::vector<ap::SlotAnimation>     anims;
-    StandIn                            standIn;
-    std::optional<Placement>           placed; ///< last placement sent
-    std::int64_t                       resendAt = -1;
+    CarryData                      data;
+    int                            version = 0;
+    std::vector<ap::SlotAnimation> anims;
+    StandIn                        standIn;
+    std::optional<Placement>       placed; ///< last placement sent
+    std::int64_t                   resendAt = -1;
 };
 
 struct Pair {
@@ -117,7 +120,7 @@ struct Pair {
 
 struct PairKey {
     std::int64_t carrier, viewer;
-    friend bool operator==(PairKey const&, PairKey const&) = default;
+    friend bool  operator==(PairKey const&, PairKey const&) = default;
 };
 struct PairKeyHash {
     std::size_t operator()(PairKey const& k) const {
@@ -126,12 +129,12 @@ struct PairKeyHash {
 };
 
 struct State {
-    std::unordered_map<std::int64_t, Carrier>                   carriers;
-    std::unordered_map<PairKey, Pair, PairKeyHash>              pairs;
-    std::unordered_set<std::int64_t>                            dirty; ///< carriers whose carry changed
-    std::unordered_set<std::int64_t>                            announced;
-    std::unordered_map<std::int64_t, std::vector<SentPacket>>   testViewers;
-    std::int64_t                                                tick = 0;
+    std::unordered_map<std::int64_t, Carrier>                 carriers;
+    std::unordered_map<PairKey, Pair, PairKeyHash>            pairs;
+    std::unordered_set<std::int64_t>                          dirty; ///< carriers whose carry changed
+    std::unordered_set<std::int64_t>                          announced;
+    std::unordered_map<std::int64_t, std::vector<SentPacket>> testViewers;
+    std::int64_t                                              tick = 0;
 };
 State& state() {
     static State s;
@@ -158,7 +161,11 @@ void send(Player const& viewer, std::shared_ptr<Packet> const& pkt, SentPacket r
 
 void sendAnimations(Player const& viewer, Player const& carrier, std::vector<ap::SlotAnimation> const& anims) {
     for (auto const& a : anims) {
-        send(viewer, animatePacket(carrier, a.animation, a.controller), {"animate", a.animation, {{"controller", a.controller}}});
+        send(
+            viewer,
+            animatePacket(carrier, a.animation, a.controller),
+            {"animate", a.animation, {{"controller", a.controller}}}
+        );
     }
 }
 
@@ -168,7 +175,15 @@ void sendRemove(Player const& viewer, std::uint64_t id) {
 
 void sendStandIn(Player const& viewer, StandIn const& s, Placement const& at) {
     moveAddPacket(s, at);
-    send(viewer, s.add, {"add", s.actorType, {{"id", s.id}, {"scale", s.scale}, {"block", s.item}}});
+    send(
+        viewer,
+        s.add,
+        {
+            "add",
+            s.actorType,
+            {{"id", s.id}, {"scale", s.scale}, {"block", s.item}}
+    }
+    );
     if (s.equip) send(viewer, s.equip, {"equip", s.item, {{"id", s.id}}});
 }
 
@@ -211,7 +226,7 @@ void tick() {
     std::vector<Player*>                      viewers;
     level->forEachPlayer([&](Player& p) {
         players[idOf(p)] = &p;
-        bool settled = carry::tickCount(p) >= kJoinDelay || s.testViewers.contains(idOf(p));
+        bool settled     = carry::tickCount(p) >= kJoinDelay || s.testViewers.contains(idOf(p));
         if (isViewer(p) && settled) viewers.push_back(&p);
         return true;
     });
@@ -237,9 +252,10 @@ void tick() {
     // Pairs whose carrier stopped carrying / left, or whose viewer left / changed its kind.
     std::erase_if(s.pairs, [&](auto const& kv) {
         auto const& [key, pair] = kv;
-        Player* viewer  = playerOf(key.viewer);
-        Player* carrier = playerOf(key.carrier);
-        bool    keep    = carrying.contains(key.carrier) && viewer && isViewer(*viewer) && pair.modded == net::isModded(*viewer);
+        Player* viewer          = playerOf(key.viewer);
+        Player* carrier         = playerOf(key.carrier);
+        bool    keep =
+            carrying.contains(key.carrier) && viewer && isViewer(*viewer) && pair.modded == net::isModded(*viewer);
         if (!keep) endPair(viewer, carrier, pair);
         return !keep;
     });
@@ -248,7 +264,7 @@ void tick() {
     for (auto& [cid, c] : s.carriers) {
         Player* carrier = playerOf(cid);
         if (!carrier) continue;
-        bool resend = c.resendAt == s.tick;
+        bool                     resend = c.resendAt == s.tick;
         std::optional<Placement> at;
         if (c.standIn.valid()) at = placementFor(c.standIn, *carrier);
         bool moved = at && at != c.placed;

@@ -34,7 +34,7 @@
 
 namespace {
 using lo::selftest::Context;
-namespace carry = lo::feature::carry;
+namespace carry   = lo::feature::carry;
 namespace armpose = lo::feature::armpose;
 namespace ap      = lo::core::armpose;
 using armpose::SentPacket;
@@ -43,17 +43,18 @@ using carry::CarryType;
 
 /// Script arm values for the `armpose.script` test only.
 bool gScriptArms = false;
-LO_REGISTER_VISUAL_PROVIDER(carry::VisualProvider{
-    .name     = "armpose-test",
-    .priority = -1000,
-    .apply =
-        [](CarryData const&, carry::CarryVisual& v) {
+LO_REGISTER_VISUAL_PROVIDER(
+    carry::VisualProvider{
+        .name     = "armpose-test",
+        .priority = -1000,
+        .apply    = [](CarryData const&, carry::CarryVisual& v) {
             if (!gScriptArms) return;
-            v.rightArm[0]    = -2.0f;
-            v.rightArm[1]    = 0.5f;
-            v.renderLeftArm  = false;
+            v.rightArm[0]   = -2.0f;
+            v.rightArm[1]   = 0.5f;
+            v.renderLeftArm = false;
         },
-});
+    }
+);
 
 CarryData blockCarry(std::string_view id) {
     CarryData d;
@@ -72,7 +73,8 @@ bool sameAnimations(std::vector<SentPacket> const& sent, std::vector<ap::SlotAni
     auto anims = ofKind(sent, "animate");
     if (anims.size() != want.size()) return false;
     for (std::size_t i = 0; i < want.size(); ++i) {
-        if (anims[i].name != want[i].animation || anims[i].detail.value("controller", "") != want[i].controller) return false;
+        if (anims[i].name != want[i].animation || anims[i].detail.value("controller", "") != want[i].controller)
+            return false;
     }
     return true;
 }
@@ -117,9 +119,12 @@ LO_REGISTER_SELFTEST("armpose.pose", [](Context& ctx) {
     ctx.check(near(stone.right.rotation[2], -0.05f) && near(stone.left.rotation[2], 0.05f), "z spread -0.05 / +0.05");
 
     // Offsets come from the Bedrock shape: a chest is 0.95 wide (Java 0.875), a flower pot 0.375.
-    auto chest = armpose::poseFor(blockCarry("minecraft:chest"));
-    float off  = (0.95f - 1.0f) / 1.5f;
-    ctx.check(near(chest.right.rotation[1], off) && near(chest.left.rotation[1], -off), "chest: offset from its 0.95 shape");
+    auto  chest = armpose::poseFor(blockCarry("minecraft:chest"));
+    float off   = (0.95f - 1.0f) / 1.5f;
+    ctx.check(
+        near(chest.right.rotation[1], off) && near(chest.left.rotation[1], -off),
+        "chest: offset from its 0.95 shape"
+    );
     auto pot = armpose::poseFor(blockCarry("minecraft:flower_pot"));
     ctx.check(near(pot.right.rotation[1], (0.375f - 1.0f) / 1.5f), "flower pot: offset from its 0.375 shape");
 
@@ -163,7 +168,10 @@ LO_REGISTER_SELFTEST("armpose.vanilla_viewer", [](Context& ctx) -> ll::coro::Cor
     ctx.require(adds.size() == 1, "the viewer gets one stand-in");
     ctx.check(adds[0].name == "minecraft:falling_block", "a block stand-in is a display block");
     ctx.check(adds[0].detail.value("block", "") == "minecraft:chest", "it shows the chest");
-    ctx.check(near(adds[0].detail.value("scale", 0.0f), 0.6f), "at Carry On's 0.6 block scale");
+    ctx.check(
+        near(adds[0].detail.value("scale", 0.0f), 1.0f),
+        "a display block keeps its size (clients ignore its scale)"
+    );
     std::uint64_t id = adds[0].detail.value("id", std::uint64_t{0});
     ctx.check(id != 0 && armpose::standInShownTo(*carrier, *viewer) == id, "the stand-in id is tracked");
     ctx.check(carry::isCarrying(*carrier) && carrier->getSelectedItem().isNull(), "the carrier's hand stays empty");
@@ -182,7 +190,8 @@ LO_REGISTER_SELFTEST("armpose.vanilla_viewer", [](Context& ctx) -> ll::coro::Cor
     co_await ctx.ticks(2);
     sent        = armpose::takeTestPackets(*viewer);
     auto none   = ofKind(sent, "animate");
-    bool allEnd = !none.empty() && std::all_of(none.begin(), none.end(), [](auto const& p) { return p.name == ap::kNoneAnimation; });
+    bool allEnd = !none.empty()
+               && std::all_of(none.begin(), none.end(), [](auto const& p) { return p.name == ap::kNoneAnimation; });
     ctx.check(allEnd && none.size() == ap::allControllers().size(), "every slot ends when the carry ends");
     auto removes = ofKind(sent, "remove");
     ctx.check(removes.size() == 1 && removes[0].detail.value("id", std::uint64_t{0}) == id, "the stand-in is removed");
@@ -201,7 +210,11 @@ LO_REGISTER_SELFTEST("armpose.modded_viewer", [](Context& ctx) -> ll::coro::Coro
     ctx.check(ofKind(modded, "add").empty(), "a modded viewer gets no stand-in");
     auto msgs = lo::net::takeTestMessages(*viewer);
     ctx.check(
-        std::any_of(msgs.begin(), msgs.end(), [](auto const& m) { return m.first.find("CarrySyncPacket") != std::string::npos; }),
+        std::any_of(
+            msgs.begin(),
+            msgs.end(),
+            [](auto const& m) { return m.first.find("CarrySyncPacket") != std::string::npos; }
+        ),
         "it gets the carry sync and draws the carried thing natively"
     );
     ctx.check(armpose::standInShownTo(*carrier, *viewer) == 0, "no stand-in tracked for a modded viewer");
@@ -218,7 +231,8 @@ LO_REGISTER_SELFTEST("armpose.entity", [](Context& ctx) -> ll::coro::CoroTask<> 
     auto  level  = ll::service::getLevel();
     auto& region = carrier->getDimensionBlockSource();
     Vec3  at     = lo::game::blockPos(ctx.testPos(1325)).bottomCenter();
-    auto* pig    = level->getSpawner().spawnMob(region, ActorDefinitionIdentifier("minecraft:pig"), nullptr, at, false, false, false);
+    auto* pig    = level->getSpawner()
+                       .spawnMob(region, ActorDefinitionIdentifier("minecraft:pig"), nullptr, at, false, false, false);
     ctx.require(pig != nullptr, "a pig spawned");
     pig->setNameTag("lo_armpose_pig");
     co_await ctx.ticks(1);
@@ -256,7 +270,10 @@ LO_REGISTER_SELFTEST("armpose.player", [](Context& ctx) -> ll::coro::CoroTask<> 
     carry::set(*carrier, d);
     co_await ctx.ticks(2);
     auto sent = armpose::takeTestPackets(*viewer);
-    ctx.check(!ofKind(sent, "animate").empty() && ofKind(sent, "animate")[0].name == "animation.liftoff.carry.right.xc.m26", "player carried: x = -1.3");
+    ctx.check(
+        !ofKind(sent, "animate").empty() && ofKind(sent, "animate")[0].name == "animation.liftoff.carry.right.xc.m26",
+        "player carried: x = -1.3"
+    );
     ctx.check(ofKind(sent, "add").empty(), "a carried player needs no stand-in");
     teardown(*carrier, *viewer);
 });
@@ -266,8 +283,8 @@ LO_REGISTER_SELFTEST("armpose.view_range", [](Context& ctx) -> ll::coro::CoroTas
     ctx.require(co_await setup(ctx, 1340, carrier, viewer), "test area loaded");
     carry::set(*carrier, blockCarry("minecraft:stone"));
     co_await ctx.ticks(2);
-    auto sent = armpose::takeTestPackets(*viewer);
-    std::uint64_t id = ofKind(sent, "add").empty() ? 0 : ofKind(sent, "add")[0].detail.value("id", std::uint64_t{0});
+    auto          sent = armpose::takeTestPackets(*viewer);
+    std::uint64_t id   = ofKind(sent, "add").empty() ? 0 : ofKind(sent, "add")[0].detail.value("id", std::uint64_t{0});
     ctx.require(id != 0, "stand-in shown nearby");
 
     // Far beyond any view distance: the client dropped the carrier, the stand-in goes too.
@@ -276,13 +293,19 @@ LO_REGISTER_SELFTEST("armpose.view_range", [](Context& ctx) -> ll::coro::CoroTas
     co_await ctx.ticks(2);
     sent         = armpose::takeTestPackets(*viewer);
     auto removes = ofKind(sent, "remove");
-    ctx.check(removes.size() == 1 && removes[0].detail.value("id", std::uint64_t{0}) == id, "out of view: stand-in removed");
+    ctx.check(
+        removes.size() == 1 && removes[0].detail.value("id", std::uint64_t{0}) == id,
+        "out of view: stand-in removed"
+    );
     ctx.check(armpose::standInShownTo(*carrier, *viewer) == 0, "nothing shown out of view");
 
     standAt(*carrier, ctx.testPos(1340));
     co_await ctx.ticks(2);
     sent = armpose::takeTestPackets(*viewer);
-    ctx.check(ofKind(sent, "add").size() == 1 && ofKind(sent, "animate").size() == ap::allControllers().size(), "back in view: pose and stand-in again");
+    ctx.check(
+        ofKind(sent, "add").size() == 1 && ofKind(sent, "animate").size() == ap::allControllers().size(),
+        "back in view: pose and stand-in again"
+    );
     teardown(*carrier, *viewer);
 });
 
@@ -297,7 +320,10 @@ LO_REGISTER_SELFTEST("armpose.reannounce", [](Context& ctx) -> ll::coro::CoroTas
     ctx.check(pkt != nullptr, "an AddPlayerPacket is built");
     co_await ctx.ticks(5);
     auto sent = armpose::takeTestPackets(*viewer);
-    ctx.check(ofKind(sent, "animate").size() == ap::allControllers().size(), "arm pose re-sent after the carrier was re-announced");
+    ctx.check(
+        ofKind(sent, "animate").size() == ap::allControllers().size(),
+        "arm pose re-sent after the carrier was re-announced"
+    );
     ctx.check(ofKind(sent, "add").empty(), "the stand-in is not duplicated");
     teardown(*carrier, *viewer);
 });
@@ -323,12 +349,17 @@ LO_REGISTER_SELFTEST("armpose.showcase", [](Context& ctx) -> ll::coro::CoroTask<
     BlockPos base = lo::game::blockPos(pos);
     // ensureLoaded parked the test player here: move it out of the pictures (behind the camera).
     ctx.player().teleport(Vec3{base.x + 0.5f, static_cast<float>(base.y), base.z - 8.5f}, real->getDimensionId());
-    real->teleport(Vec3{base.x + 0.5f, static_cast<float>(base.y), base.z + 0.5f}, real->getDimensionId(), Vec2{10.0f, 0.0f});
+    real->teleport(
+        Vec3{base.x + 0.5f, static_cast<float>(base.y), base.z + 0.5f},
+        real->getDimensionId(),
+        Vec2{10.0f, 0.0f}
+    );
 
     auto& level  = *ll::service::getLevel();
     auto& region = real->getDimensionBlockSource();
     Vec3  pigAt  = Vec3{base.x + 0.5f, static_cast<float>(base.y), base.z + 8.5f};
-    auto* pig    = level.getSpawner().spawnMob(region, ActorDefinitionIdentifier("minecraft:pig"), nullptr, pigAt, false, false, false);
+    auto* pig = level.getSpawner()
+                    .spawnMob(region, ActorDefinitionIdentifier("minecraft:pig"), nullptr, pigAt, false, false, false);
     ctx.require(pig != nullptr, "a pig spawned");
     CarryData pigCarry;
     pigCarry.type   = CarryType::Entity;
@@ -336,15 +367,23 @@ LO_REGISTER_SELFTEST("armpose.showcase", [](Context& ctx) -> ll::coro::CoroTask<
     carry::removeCapturedActor(*pig);
 
     struct Show {
-        float      dx;
-        CarryData  data;
-        bool       sneak;
+        float     dx;
+        CarryData data;
+        bool      sneak;
     };
-    std::vector<Show> shows{{-2.0f, blockCarry("minecraft:chest"), false}, {0.0f, pigCarry, false}, {2.0f, blockCarry("minecraft:barrel"), true}};
+    std::vector<Show> shows{
+        {-2.0f, blockCarry("minecraft:chest"),  false},
+        {0.0f,  pigCarry,                       false},
+        {2.0f,  blockCarry("minecraft:barrel"), true }
+    };
     std::vector<SimulatedPlayer*> carriers;
     for (std::size_t i = 0; i < shows.size(); ++i) {
         auto& sp = ctx.spawnPlayer("lo_armpose_carrier" + std::to_string(i));
-        sp.teleport(Vec3{base.x + 0.5f + shows[i].dx, static_cast<float>(base.y), base.z + 4.5f}, sp.getDimensionId(), Vec2{0.0f, 180.0f});
+        sp.teleport(
+            Vec3{base.x + 0.5f + shows[i].dx, static_cast<float>(base.y), base.z + 4.5f},
+            sp.getDimensionId(),
+            Vec2{0.0f, 180.0f}
+        );
         carriers.push_back(&sp);
     }
     co_await ctx.ticks(5);
@@ -367,8 +406,8 @@ LO_REGISTER_SELFTEST("armpose.showcase", [](Context& ctx) -> ll::coro::CoroTask<
 });
 
 LO_REGISTER_SELFTEST("armpose.pack", [](Context& ctx) {
-    auto file = lo::Mod::getInstance().getSelf().getModDir() / "resource_packs" / "LiftOff_RP" / "animations"
-              / "liftoff_carry.animation.json";
+    auto          file = lo::Mod::getInstance().getSelf().getModDir() / "resource_packs" / "LiftOff_RP" / "animations"
+                       / "liftoff_carry.animation.json";
     std::ifstream in(file);
     ctx.require(in.good(), "the resource pack has animations/liftoff_carry.animation.json");
     auto j = nlohmann::json::parse(in, nullptr, false);
@@ -384,9 +423,15 @@ LO_REGISTER_SELFTEST("armpose.pack", [](Context& ctx) {
         }
     }
     ctx.check(missing == 0, "every quantised arm animation exists (missing: " + std::to_string(missing) + ")");
-    ctx.check(!anims.contains(ap::animationName(ap::Side::Right, ap::Axis::X, ap::kMaxIndex + 1)), "the table ends at kMaxIndex");
+    ctx.check(
+        !anims.contains(ap::animationName(ap::Side::Right, ap::Axis::X, ap::kMaxIndex + 1)),
+        "the table ends at kMaxIndex"
+    );
     auto sneak = "q.is_sneaking * " + std::to_string(static_cast<int>(ap::kSneakRootDegrees));
-    ctx.check(anims[ap::animationName(ap::Side::Left, ap::Axis::X, 0)].dump().find(sneak) != std::string::npos, "sneak tilt matches kSneakRootDegrees");
+    ctx.check(
+        anims[ap::animationName(ap::Side::Left, ap::Axis::X, 0)].dump().find(sneak) != std::string::npos,
+        "sneak tilt matches kSneakRootDegrees"
+    );
     for (char const* name : {ap::kFirstPersonAnimation, ap::kNoneAnimation}) {
         ctx.check(anims.contains(name), std::string(name) + " exists");
     }

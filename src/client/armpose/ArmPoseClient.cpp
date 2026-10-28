@@ -57,7 +57,7 @@ void const*& doneLevel() {
 void ensureAnimations(Level& level) {
     auto& done = doneLevel();
     if (done == &level) return;
-    done = &level;
+    done     = &level;
     auto* ci = currentClient();
     if (!ci) return;
     auto groupPtr = ci->getActorAnimationGroup(); // the client's group (a client level has none)
@@ -90,10 +90,12 @@ class ArmPoseClientModule {
 public:
     void install() {
         auto& bus = ll::event::EventBus::getInstance();
-        mListeners.push_back(bus.emplaceListener<ll::event::ClientLevelTickEvent>([](ll::event::ClientLevelTickEvent& ev) {
-            ensureAnimations(ev.level());
+        mListeners.push_back(bus.emplaceListener<ll::event::ClientLevelTickEvent>(
+            [](ll::event::ClientLevelTickEvent& ev) { ensureAnimations(ev.level()); }
+        ));
+        mListeners.push_back(bus.emplaceListener<ll::event::ClientExitLevelEvent>([](auto&) {
+            doneLevel() = nullptr;
         }));
-        mListeners.push_back(bus.emplaceListener<ll::event::ClientExitLevelEvent>([](auto&) { doneLevel() = nullptr; }));
     }
     void uninstall() {
         auto& bus = ll::event::EventBus::getInstance();

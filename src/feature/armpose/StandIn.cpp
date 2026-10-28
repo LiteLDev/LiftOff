@@ -14,13 +14,14 @@
 #include "mc/dataloadhelper/DefaultDataLoadHelper.h"
 #include "mc/deps/ecs/gamerefs_entity/GameRefsEntity.h"
 #include "mc/deps/ecs/gamerefs_entity/OwnerStorageEntity.h"
-#include "mc/deps/nbt/CompoundTag.h"
 #include "mc/deps/nbt/ByteTag.h"
+#include "mc/deps/nbt/CompoundTag.h"
 #include "mc/deps/nbt/IntTag.h"
 #include "mc/deps/nbt/ListTag.h"
 #include "mc/deps/nbt/StringTag.h"
 #include "mc/legacy/ActorRuntimeID.h"
 #include "mc/legacy/ActorUniqueID.h"
+#include "mc/molang/MolangVersion.h"
 #include "mc/network/MinecraftPacketIds.h"
 #include "mc/network/MinecraftPackets.h"
 #include "mc/network/packet/AddActorPacket.h"
@@ -28,7 +29,7 @@
 #include "mc/network/packet/MobArmorEquipmentPacket.h"
 #include "mc/network/packet/MoveActorAbsolutePacket.h"
 #include "mc/network/packet/RemoveActorPacket.h"
-#include "mc/molang/MolangVersion.h"
+#include "mc/network/packet/SyncedAttribute.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorDataIDs.h"
 #include "mc/world/actor/ActorFactory.h"
@@ -36,7 +37,6 @@
 #include "mc/world/actor/DataItem.h"
 #include "mc/world/actor/SynchedActorData.h"
 #include "mc/world/actor/player/Player.h"
-#include "mc/network/packet/SyncedAttribute.h"
 #include "mc/world/item/ItemStack.h"
 #include "mc/world/item/NetworkItemStackDescriptor.h"
 #include "mc/world/level/Level.h"
@@ -59,12 +59,14 @@ namespace {
 constexpr float kPi = 3.14159265358979323846f;
 
 // Placement (blocks; tuned against screenshots of the arm pose, see the e2e scenario armpose):
-constexpr float kHoldY        = 0.95f; ///< centre of the carried thing above the carrier's feet
-constexpr float kSneakDrop    = 0.3f;  ///< lower while sneaking
-constexpr float kForward      = 0.55f; ///< centre of a carried block in front of the body
-constexpr float kSwimForward  = 1.3f;  ///< swimming / gliding: in front of the head
-constexpr float kSwimY        = 0.3f;
-constexpr float kBlockScale     = 0.6f; ///< Carry On draws carried blocks at 0.6 in third person
+constexpr float kHoldY       = 0.95f; ///< centre of the carried thing above the carrier's feet
+constexpr float kSneakDrop   = 0.3f;  ///< lower while sneaking
+constexpr float kForward     = 0.55f; ///< centre of a carried block in front of the body
+constexpr float kSwimForward = 1.3f;  ///< swimming / gliding: in front of the head
+constexpr float kSwimY       = 0.3f;
+/// Carry On draws carried blocks at 0.6; vanilla clients ignore the scale of a falling block (and drop a
+/// scaled chest), so the display block keeps its full size.
+constexpr float kBlockScale     = 1.0f;
 constexpr char  kFallingBlock[] = "minecraft:falling_block";
 
 using DataList = std::vector<std::unique_ptr<DataItem>>;
@@ -94,7 +96,8 @@ void fixFlags(DataList& list, bool invisible) {
     if (auto* d = findItem(list, ActorDataIDs::Reserved0)) {
         if (auto v = d->getData<std::int64_t>()) flags = *v;
     }
-    flags &= ~(flagBit(ActorFlags::HasGravity) | flagBit(ActorFlags::CanShowName) | flagBit(ActorFlags::AlwaysShowName));
+    flags &=
+        ~(flagBit(ActorFlags::HasGravity) | flagBit(ActorFlags::CanShowName) | flagBit(ActorFlags::AlwaysShowName));
     if (invisible) flags |= flagBit(ActorFlags::Invisible);
     setItem(list, ActorDataIDs::Reserved0, flags);
 }
@@ -127,7 +130,7 @@ bool withTempActor(std::string_view snbt, Level* level, F&& fn) {
     if (!tag) return false;
     (*tag)["Pos"] = ListTag{0.0f, 0.0f, 0.0f};
     DefaultDataLoadHelper helper;
-    auto ctx = level->getActorFactory().loadActor(&*tag, helper, anyHeightRange(), nullptr);
+    auto                  ctx = level->getActorFactory().loadActor(&*tag, helper, anyHeightRange(), nullptr);
     if (!ctx) return false;
     Actor* actor = Actor::tryGetFromEntity(*ctx, false);
     if (!actor) return false;
@@ -153,31 +156,33 @@ std::shared_ptr<Packet> blockAddPacket(std::uint64_t id, Block const& block) {
     auto& list             = *pkt->mData->mData;
     fixFlags(list, false); // no gravity: it never falls on the client
     setItem(list, ActorDataIDs::Variant, static_cast<int>(block.mNetworkId));
-    setItem(list, ActorDataIDs::Reserved038, kBlockScale);
     return pkt;
 }
-std::shared_ptr<Packet> entityAddPacket(std::string_view snbt, std::uint64_t id, StandIn& out, float fixedScale = 0.0f) {
+std::shared_ptr<Packet>
+entityAddPacket(std::string_view snbt, std::uint64_t id, StandIn& out, float fixedScale = 0.0f) {
     std::shared_ptr<AddActorPacket> pkt;
-    bool ok = withTempActor(snbt, nullptr, [&](Actor& actor) {
-        auto box = boxOf(actor);
+    bool                            ok = withTempActor(snbt, nullptr, [&](Actor& actor) {
+        auto                  box = boxOf(actor);
         AddActorPacketPayload payload(actor);
-        pkt                       = make<AddActorPacket>(MinecraftPacketIds::AddActor);
-        pkt->mEntityId->rawID     = static_cast<std::int64_t>(id);
-        pkt->mRuntimeId->rawID    = id;
-        pkt->mActorType           = *payload.mActorType;
-        pkt->mAttributes          = *payload.mAttributes;
+        pkt                                    = make<AddActorPacket>(MinecraftPacketIds::AddActor);
+        pkt->mEntityId->rawID                  = static_cast<std::int64_t>(id);
+        pkt->mRuntimeId->rawID                 = id;
+        pkt->mActorType                        = *payload.mActorType;
+        pkt->mAttributes                       = *payload.mAttributes;
         pkt->mSynchedProperties->mIntEntries   = payload.mSynchedProperties->mIntEntries;
         pkt->mSynchedProperties->mFloatEntries = payload.mSynchedProperties->mFloatEntries;
-        auto& list = *pkt->mData->mData;
-        list       = std::move(*payload.mData->mData);
+        auto& list                             = *pkt->mData->mData;
+        list                                   = std::move(*payload.mData->mData);
         // Carry On draws the entity without name tag or leash.
         std::erase_if(list, [](auto const& d) {
-            return d && (d->getId() == static_cast<DataItem::ID>(ActorDataIDs::Name)
-                         || d->getId() == static_cast<DataItem::ID>(ActorDataIDs::LeashHolder));
+            return d
+                && (d->getId() == static_cast<DataItem::ID>(ActorDataIDs::Name)
+                    || d->getId() == static_cast<DataItem::ID>(ActorDataIDs::LeashHolder));
         });
         fixFlags(list, false);
         // Carry On (third person): 0.6 * 1.666 * (10 - min(9.9, h * w)) * 0.08.
-        float s = fixedScale > 0.0f ? fixedScale : 0.6f * 1.666f * (10.0f - std::min(9.9f, box.height * box.width)) * 0.08f;
+        float s =
+            fixedScale > 0.0f ? fixedScale : 0.6f * 1.666f * (10.0f - std::min(9.9f, box.height * box.width)) * 0.08f;
         float base = scaleOf(list);
         setItem(list, ActorDataIDs::Reserved038, base * s);
         out.scale  = base * s;
@@ -203,26 +208,46 @@ EntityBox fallbackBox(std::string_view snbt) {
         float       w, h;
     };
     static constexpr Size kSizes[] = {
-        {"minecraft:pig", 0.9f, 0.9f},           {"minecraft:cow", 0.9f, 1.3f},
-        {"minecraft:mooshroom", 0.9f, 1.3f},     {"minecraft:sheep", 0.9f, 1.3f},
-        {"minecraft:chicken", 0.6f, 0.8f},       {"minecraft:wolf", 0.6f, 0.8f},
-        {"minecraft:cat", 0.6f, 0.7f},           {"minecraft:ocelot", 0.6f, 0.7f},
-        {"minecraft:fox", 0.6f, 0.7f},           {"minecraft:rabbit", 0.67f, 0.67f},
-        {"minecraft:horse", 1.4f, 1.6f},         {"minecraft:donkey", 1.4f, 1.6f},
-        {"minecraft:mule", 1.4f, 1.6f},          {"minecraft:llama", 0.9f, 1.87f},
-        {"minecraft:trader_llama", 0.9f, 1.87f}, {"minecraft:goat", 0.9f, 1.3f},
-        {"minecraft:bee", 0.55f, 0.5f},          {"minecraft:parrot", 0.5f, 1.0f},
-        {"minecraft:turtle", 1.2f, 0.4f},        {"minecraft:axolotl", 0.75f, 0.42f},
-        {"minecraft:frog", 0.5f, 0.55f},         {"minecraft:armadillo", 0.7f, 0.65f},
-        {"minecraft:bat", 0.5f, 0.9f},           {"minecraft:allay", 0.35f, 0.6f},
-        {"minecraft:villager_v2", 0.6f, 1.9f},   {"minecraft:wandering_trader", 0.6f, 1.9f},
-        {"minecraft:snow_golem", 0.4f, 1.8f},    {"minecraft:iron_golem", 1.4f, 2.9f},
-        {"minecraft:squid", 0.95f, 0.95f},       {"minecraft:glow_squid", 0.95f, 0.95f},
-        {"minecraft:dolphin", 0.9f, 0.6f},       {"minecraft:cod", 0.5f, 0.3f},
-        {"minecraft:salmon", 0.5f, 0.5f},        {"minecraft:pufferfish", 0.8f, 0.8f},
-        {"minecraft:tropicalfish", 0.4f, 0.4f},  {"minecraft:strider", 0.9f, 1.7f},
-        {"minecraft:polar_bear", 1.3f, 1.4f},    {"minecraft:panda", 1.7f, 1.5f},
-        {"minecraft:camel", 1.7f, 2.375f},       {"minecraft:sniffer", 1.9f, 1.75f},
+        {"minecraft:pig",              0.9f,  0.9f  },
+        {"minecraft:cow",              0.9f,  1.3f  },
+        {"minecraft:mooshroom",        0.9f,  1.3f  },
+        {"minecraft:sheep",            0.9f,  1.3f  },
+        {"minecraft:chicken",          0.6f,  0.8f  },
+        {"minecraft:wolf",             0.6f,  0.8f  },
+        {"minecraft:cat",              0.6f,  0.7f  },
+        {"minecraft:ocelot",           0.6f,  0.7f  },
+        {"minecraft:fox",              0.6f,  0.7f  },
+        {"minecraft:rabbit",           0.67f, 0.67f },
+        {"minecraft:horse",            1.4f,  1.6f  },
+        {"minecraft:donkey",           1.4f,  1.6f  },
+        {"minecraft:mule",             1.4f,  1.6f  },
+        {"minecraft:llama",            0.9f,  1.87f },
+        {"minecraft:trader_llama",     0.9f,  1.87f },
+        {"minecraft:goat",             0.9f,  1.3f  },
+        {"minecraft:bee",              0.55f, 0.5f  },
+        {"minecraft:parrot",           0.5f,  1.0f  },
+        {"minecraft:turtle",           1.2f,  0.4f  },
+        {"minecraft:axolotl",          0.75f, 0.42f },
+        {"minecraft:frog",             0.5f,  0.55f },
+        {"minecraft:armadillo",        0.7f,  0.65f },
+        {"minecraft:bat",              0.5f,  0.9f  },
+        {"minecraft:allay",            0.35f, 0.6f  },
+        {"minecraft:villager_v2",      0.6f,  1.9f  },
+        {"minecraft:wandering_trader", 0.6f,  1.9f  },
+        {"minecraft:snow_golem",       0.4f,  1.8f  },
+        {"minecraft:iron_golem",       1.4f,  2.9f  },
+        {"minecraft:squid",            0.95f, 0.95f },
+        {"minecraft:glow_squid",       0.95f, 0.95f },
+        {"minecraft:dolphin",          0.9f,  0.6f  },
+        {"minecraft:cod",              0.5f,  0.3f  },
+        {"minecraft:salmon",           0.5f,  0.5f  },
+        {"minecraft:pufferfish",       0.8f,  0.8f  },
+        {"minecraft:tropicalfish",     0.4f,  0.4f  },
+        {"minecraft:strider",          0.9f,  1.7f  },
+        {"minecraft:polar_bear",       1.3f,  1.4f  },
+        {"minecraft:panda",            1.7f,  1.5f  },
+        {"minecraft:camel",            1.7f,  2.375f},
+        {"minecraft:sniffer",          1.9f,  1.75f },
     };
     EntityBox b;
     auto      tag = carry::parseNbt(snbt);
@@ -308,7 +333,8 @@ StandIn buildStandIn(carry::CarryData const& data, carry::CarryVisual const& vis
         s.actorType = *static_cast<AddActorPacket&>(*s.add).mActorType;
         break;
     }
-    case Kind::None: break;
+    case Kind::None:
+        break;
     }
     return s;
 }
@@ -335,23 +361,23 @@ Placement placementFor(StandIn const& standIn, Player const& carrier) {
 
 void moveAddPacket(StandIn const& standIn, Placement const& at) {
     if (!standIn.add) return;
-    auto& pkt           = static_cast<AddActorPacket&>(*standIn.add);
-    pkt.mPos            = at.pos;
-    pkt.mRot            = Vec2{0.0f, at.yaw};
-    pkt.mYHeadRotation  = at.yaw;
-    pkt.mYBodyRotation  = at.yaw;
+    auto& pkt          = static_cast<AddActorPacket&>(*standIn.add);
+    pkt.mPos           = at.pos;
+    pkt.mRot           = Vec2{0.0f, at.yaw};
+    pkt.mYHeadRotation = at.yaw;
+    pkt.mYBodyRotation = at.yaw;
 }
 
 std::shared_ptr<Packet> movePacket(StandIn const& standIn, Placement const& at) {
-    auto  pkt             = make<MoveActorAbsolutePacket>(MinecraftPacketIds::MoveAbsoluteActor);
-    auto& d               = *pkt->mMoveData;
-    d.mRuntimeId->rawID   = standIn.id;
-    d.mHeader->mRaw       = 0;
-    d.mPos                = at.pos;
-    d.mRotX               = 0;
-    d.mRotY               = angleByte(at.yaw);
-    d.mRotYHead           = angleByte(at.yaw);
-    d.mRotYBody           = angleByte(at.yaw);
+    auto  pkt           = make<MoveActorAbsolutePacket>(MinecraftPacketIds::MoveAbsoluteActor);
+    auto& d             = *pkt->mMoveData;
+    d.mRuntimeId->rawID = standIn.id;
+    d.mHeader->mRaw     = 0;
+    d.mPos              = at.pos;
+    d.mRotX             = 0;
+    d.mRotY             = angleByte(at.yaw);
+    d.mRotYHead         = angleByte(at.yaw);
+    d.mRotYBody         = angleByte(at.yaw);
     return pkt;
 }
 
@@ -361,7 +387,8 @@ std::shared_ptr<Packet> removePacket(std::uint64_t id) {
     return pkt;
 }
 
-std::shared_ptr<Packet> animatePacket(Player const& carrier, std::string const& animation, std::string const& controller) {
+std::shared_ptr<Packet>
+animatePacket(Player const& carrier, std::string const& animation, std::string const& controller) {
     auto pkt = make<AnimateEntityPacket>(MinecraftPacketIds::TriggerAnimation);
     pkt->mRuntimeIds->clear();
     pkt->mRuntimeIds->push_back(carrier.getRuntimeID());
