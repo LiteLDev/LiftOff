@@ -3,6 +3,7 @@
 #include "net/CarryProtocol.h"
 
 #include <exception>
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -227,6 +228,7 @@ using feature::carry::CarryData;
 
 namespace {
 struct ClientState {
+    std::mutex                                                                        mirrorMutex; ///< guards `mirror`
     std::unordered_map<std::int64_t, CarryData>                                       mirror;
     std::vector<std::function<void(std::int64_t, CarryData const&)>>                  syncListeners;
     std::vector<std::function<void(std::int64_t, bool)>>                              ridingListeners;
@@ -262,7 +264,8 @@ void fire(L const& listeners, char const* what, Args const&... args) {
 } // namespace
 
 CarryData const* carriedOf(std::int64_t uniqueId) {
-    auto& m  = state().mirror;
+    std::lock_guard lock(state().mirrorMutex);
+    auto&           m  = state().mirror;
     auto  it = m.find(uniqueId);
     return it == m.end() ? nullptr : &it->second;
 }
@@ -270,6 +273,18 @@ CarryData const* carriedOf(std::int64_t uniqueId) {
 CarryData const* localData() {
     auto* p = lo::client::currentPlayer();
     return p ? carriedOf(p->getOrCreateUniqueID().rawID) : nullptr;
+}
+
+std::optional<CarryData> carriedCopy(std::int64_t uniqueId) {
+    std::lock_guard lock(state().mirrorMutex);
+    auto&           m  = state().mirror;
+    auto            it = m.find(uniqueId);
+    return it == m.end() ? std::nullopt : std::optional<CarryData>(it->second);
+}
+
+std::optional<CarryData> localCopy() {
+    auto* p = lo::client::currentPlayer();
+    return p ? carriedCopy(p->getOrCreateUniqueID().rawID) : std::nullopt;
 }
 
 bool serverHasMod() { return state().welcomed; }
@@ -320,8 +335,11 @@ public:
             auto& s       = client::carry::state();
             auto  carrier = packet.payload.value("carrier", std::int64_t{0});
             auto  data    = CarryData::fromJson(packet.payload.value("data", Json::object()));
-            if (data.isCarrying()) s.mirror[carrier] = data;
-            else s.mirror.erase(carrier);
+            {
+                std::lock_guard lock(s.mirrorMutex);
+                if (data.isCarrying()) s.mirror[carrier] = data;
+                else s.mirror.erase(carrier);
+            }
             client::carry::fire(s.syncListeners, "sync", carrier, data);
         });
     }
@@ -371,14 +389,20 @@ public:
             s.welcomed  = false;
             s.helloSent = 0;
             s.ticks     = 0;
-            s.mirror.clear();
+            {
+                std::lock_guard lock(s.mirrorMutex);
+                s.mirror.clear();
+            }
             client::carry::sendHello();
         }));
         mClientListeners.push_back(bus.emplaceListener<ll::event::ClientExitLevelEvent>([](auto&) {
             auto& s    = client::carry::state();
             s.inLevel  = false;
             s.welcomed = false;
-            s.mirror.clear();
+            {
+                std::lock_guard lock(s.mirrorMutex);
+                s.mirror.clear();
+            }
         }));
         mClientListeners.push_back(bus.emplaceListener<ll::event::ClientLevelTickEvent>([](auto&) {
             auto& s = client::carry::state();
