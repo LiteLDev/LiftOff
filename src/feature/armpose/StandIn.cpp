@@ -214,6 +214,7 @@ EntityBox entityBox(std::string_view snbt, Level* level) {
     }
     EntityBox box;
     withTempActor(snbt, level, [&](Actor& actor) { box = boxOf(actor); });
+    if (!box.ok) return box; // not cached: the level may not be ready yet
     cache.emplace_front(std::string(snbt), box);
     if (cache.size() > 16) cache.pop_back();
     return box;
@@ -266,7 +267,7 @@ Placement placementFor(StandIn const& standIn, Player const& carrier) {
     float rad     = p.yaw * kPi / 180.0f;
     Vec3  forward = {-std::sin(rad), 0.0f, std::cos(rad)};
     Vec3  feet    = carrier.getFeetPos();
-    bool  lying   = carrier.isSwimming() || carrier.isGliding() || carrier.isCrawling();
+    bool  lying   = carrier.isSwimming() || carrier.isGliding(); // as the animations
     float centreY = lying ? kSwimY : kHoldY - (carrier.isSneaking() ? kSneakDrop : 0.0f);
     float ahead   = lying ? kSwimForward : kForward;
     float bottom  = 0.0f; // stand-in feet relative to the centre

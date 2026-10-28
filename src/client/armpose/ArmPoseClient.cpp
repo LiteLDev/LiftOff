@@ -54,6 +54,12 @@ std::unordered_map<std::int64_t, Tracked>& tracked() {
     return t;
 }
 
+/// Same carried thing (the key state is part of the record but does not change the pose).
+bool sameCarry(CarryData a, CarryData const& b) {
+    a.keyPressed = b.keyPressed;
+    return a == b;
+}
+
 void setVar(Actor& actor, std::string const& name, float value) {
     actor.mMolangVariables->setMolangVariable(HashedString(name), MolangScriptArg(value));
 }
@@ -98,7 +104,7 @@ void tick(Level& level) {
         seen[id] = true;
         bool fresh = it == known.end();
         auto& t    = known[id];
-        bool changed = fresh || t.data != *data || t.renderArms != cfg.renderArms || t.sideways != cfg.rotateEntitiesSideways;
+        bool changed = fresh || !sameCarry(t.data, *data) || t.renderArms != cfg.renderArms || t.sideways != cfg.rotateEntitiesSideways;
         if (changed) {
             t.data       = *data;
             t.renderArms = cfg.renderArms;

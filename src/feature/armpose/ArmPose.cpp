@@ -179,24 +179,14 @@ void endPair(Player const* viewer, Player const* carrier, Pair const& pair) {
 
 /// Rebuilds a carrier's pose and stand-in after its carry changed.
 void refresh(Carrier& c, CarryData const& data) {
-    c.data    = data;
+    c.data = data;
     c.version++;
-    auto visual = carry::visualFor(data);
-    auto const& client = config::get<carry::CarryClientConfig>().settings;
     // Vanilla clients have no client config: arms on (server default), BDS defaults otherwise.
-    c.standIn = buildStandIn(data, visual, nextStandInId());
-    float w   = c.standIn.kind == StandIn::Kind::Entity ? entityBox(visual.entity).width : -1.0f;
-    auto pose = ap::computePose(
-        data.isEntity() || data.isPlayer(),
-        renderWidth(data, visual, client.rotateEntitiesSideways, w),
-        overrideOf(visual.rightArm, visual.renderRightArm),
-        overrideOf(visual.leftArm, visual.renderLeftArm),
-        true
-    );
-    c.anims  = ap::vanillaAnimations(pose);
+    auto const& client = config::get<carry::CarryClientConfig>().settings;
+    c.standIn          = buildStandIn(data, carry::visualFor(data), nextStandInId());
+    c.anims            = ap::vanillaAnimations(poseFor(data, true, client.rotateEntitiesSideways));
     c.placed.reset();
 }
-
 bool inView(Player const& viewer, Player const& carrier) {
     if (&viewer == &carrier) return true;
     if (viewer.getDimensionId() != carrier.getDimensionId()) return false;
@@ -234,7 +224,9 @@ void tick() {
         auto id = idOf(p);
         carrying.insert(id);
         auto [it, fresh] = s.carriers.try_emplace(id);
-        if (fresh || s.dirty.contains(id) || it->second.data != data) refresh(it->second, data);
+        // Changes come through onCarryChanged (key presses do not count); a fresh entry covers a carry
+        // loaded at login.
+        if (fresh || s.dirty.contains(id)) refresh(it->second, data);
         if (s.announced.contains(id)) it->second.resendAt = s.tick + kResendDelay;
     });
     s.dirty.clear();
@@ -264,7 +256,7 @@ void tick() {
             bool    self = viewer == carrier;
             if (!inView(*viewer, *carrier)) {
                 if (auto it = s.pairs.find(key); it != s.pairs.end()) {
-                    if (it->second.standIn) sendRemove(*viewer, it->second.standIn);
+                    endPair(viewer, carrier, it->second); // the client may still track the carrier
                     s.pairs.erase(it);
                 }
                 continue;
@@ -354,6 +346,19 @@ public:
         if (mListener) ll::event::EventBus::getInstance().removeListener(mListener);
         mListener = nullptr;
         auto& s   = state();
+        // Take back what clients were shown (arm poses, stand-ins).
+        if (auto level = ll::service::getLevel()) {
+            std::unordered_map<std::int64_t, Player*> players;
+            level->forEachPlayer([&](Player& p) {
+                players[idOf(p)] = &p;
+                return true;
+            });
+            auto find = [&](std::int64_t id) -> Player* {
+                auto it = players.find(id);
+                return it == players.end() ? nullptr : it->second;
+            };
+            for (auto const& [key, pair] : s.pairs) endPair(find(key.viewer), find(key.carrier), pair);
+        }
         s.carriers.clear();
         s.pairs.clear();
     }

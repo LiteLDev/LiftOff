@@ -61,8 +61,10 @@ TEST(ArmPose, Quantize) {
     EXPECT_EQ(quantize(-1.3f), -26);
     EXPECT_EQ(quantize(0.024f), 0);
     EXPECT_EQ(quantize(0.026f), 1);
-    EXPECT_EQ(quantize(100.0f), kMaxIndex);
-    EXPECT_EQ(quantize(-100.0f), -kMaxIndex);
+    EXPECT_EQ(quantize(4.0f), quantize(4.0f - 2.0f * 3.14159265f)); // wrapped, not clamped
+    EXPECT_EQ(quantize(-1.0f - 2.0f * 3.14159265f), -20);
+    EXPECT_LE(quantize(3.15f), kMaxIndex);
+    EXPECT_GE(quantize(-3.15f), -kMaxIndex);
     EXPECT_FLOAT_EQ(dequantize(-20), -1.0f);
     EXPECT_NEAR(toDegrees(-1.0f), -57.2958f, 1e-3f);
 }

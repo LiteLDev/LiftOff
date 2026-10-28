@@ -380,6 +380,9 @@ LO_REGISTER_SELFTEST("armpose.pack", [](Context& ctx) {
         }
     }
     ctx.check(missing == 0, "every quantised arm animation exists (missing: " + std::to_string(missing) + ")");
+    ctx.check(!anims.contains(ap::animationName(ap::Side::Right, ap::Axis::X, ap::kMaxIndex + 1)), "the table ends at kMaxIndex");
+    auto sneak = "q.is_sneaking * " + std::to_string(static_cast<int>(ap::kSneakRootDegrees));
+    ctx.check(anims[ap::animationName(ap::Side::Left, ap::Axis::X, 0)].dump().find(sneak) != std::string::npos, "sneak tilt matches kSneakRootDegrees");
     for (char const* name : {ap::kFirstPersonAnimation, ap::kNoneAnimation, ap::kNativeAnimation}) {
         ctx.check(anims.contains(name), std::string(name) + " exists");
     }

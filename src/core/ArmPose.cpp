@@ -53,7 +53,9 @@ float toDegrees(float radians) { return radians * 180.0f / kPi; }
 
 int quantize(float radians) {
     if (!std::isfinite(radians)) return 0;
-    long i = std::lround(radians / kStep);
+    // Same angle in [-pi, pi] (a script may give any value).
+    radians = std::remainder(radians, 2.0f * kPi);
+    long i  = std::lround(radians / kStep);
     return static_cast<int>(std::clamp<long>(i, -kMaxIndex, kMaxIndex));
 }
 
