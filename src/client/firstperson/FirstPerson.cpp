@@ -28,7 +28,8 @@
 #include "mc/client/options/IOptionRegistry.h"
 #include "mc/client/player/LocalPlayer.h"
 #include "mc/client/renderer/BaseActorRenderContext.h"
-#include "mc/client/renderer/actor/ActorRenderData.h"
+#include "mc/client/renderer/actor/ActorRenderer.h"
+#include "mc/client/renderer/actor/v2/DataDrivenRendererV2.h"
 #include "mc/client/renderer/game/ItemInHandRenderer.h"
 #include "mc/deps/core/math/Vec2.h"
 #include "mc/deps/core/math/Vec3.h"
@@ -37,11 +38,14 @@
 #include "mc/deps/nbt/Int64Tag.h"
 #include "mc/deps/renderer/Camera.h"
 #include "mc/deps/renderer/MatrixStack.h"
+#include "mc/deps/vanilla_components/StateVectorComponent.h"
+#include "mc/entity/components/ActorRotationComponent.h"
 #include "mc/legacy/ActorUniqueID.h"
 #include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/RemoveActorPacketPayload.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorCategory.h"
+#include "mc/world/actor/BuiltInActorComponents.h"
 #include "mc/world/actor/Mob.h"
 #include "mc/world/actor/provider/ActorMovement.h"
 #include "mc/world/actor/provider/PlayerMovement.h"
@@ -168,8 +172,11 @@ struct Shared {
     std::mutex mutex;
     /// Entities the server removed near the local player that the client kept (unique id -> when).
     std::unordered_map<std::int64_t, std::chrono::steady_clock::time_point> kept;
-    std::int64_t              carried = 0; ///< the kept entity that is the local player's carried visual (0: none)
-    glm::mat4                 matrix{1.f}; ///< its camera-relative world matrix this frame (model units)
+    std::int64_t              carried = 0;   ///< the kept entity that is the local player's carried visual (0: none)
+    glm::vec3                 feetView{0.f}; ///< where its feet are in view space (Carry On's transform)
+    float                     scale       = 1.f;   ///< its size relative to normal
+    float                     yawOffset   = 0.f;   ///< its yaw relative to the camera (sideways, script)
+    float                     baseScale   = 0.f;   ///< its own scale (baby...), read when it became the carry
     bool                      firstPerson = false; ///< drawn in first person this frame
     std::vector<std::int64_t> remove;              ///< kept entities to delete now (client thread)
 };
@@ -212,6 +219,7 @@ void dropCarriedEntity() {
     if (s.carried) s.remove.push_back(s.carried);
     s.carried     = 0;
     s.firstPerson = false;
+    s.baseScale   = 0.f;
 }
 
 void resetCache() {
@@ -260,7 +268,12 @@ void rebuild(CarryData const& data) {
 
 /// Draws the local player's carry instead of the hand. False: not carrying a block or an entity (the
 /// vanilla hand renders; Carry On draws nothing in first person for a carried player).
-bool renderCarried(ItemInHandRenderer& self, BaseActorRenderContext& ctx, ItemContextFlags flags) {
+bool renderCarried(
+    ItemInHandRenderer&     self,
+    BaseActorRenderContext& ctx,
+    Matrix const&           worldProj,
+    ItemContextFlags        flags
+) {
     auto* player = currentPlayer();
     auto  copy   = player ? lo::client::carry::localCopy() : std::nullopt; // locked copy (render thread)
     auto* data   = copy ? &*copy : nullptr;
@@ -320,17 +333,20 @@ bool renderCarried(ItemInHandRenderer& self, BaseActorRenderContext& ctx, ItemCo
                              s.rotateEntitiesSideways,
                              c.visual
                        );
-        // The entity pass works in camera-relative world space: turn the view-space transform by the
-        // camera (yaw 0 looks south, +Z; positive pitch looks down). Bedrock entity geometry faces -Z and
-        // is in model pixels (1/16 block).
-        Vec2 const rot   = player->getRotation(); // the camera turns with the current rotation in first person
-        glm::mat4  world = glm::rotate(glm::mat4{1.f}, glm::radians(180.f - rot.y), kY);
-        world            = glm::rotate(world, glm::radians(-rot.x), kX);
-        world            = world * view;
-        world            = glm::rotate(world, glm::radians(180.f), kY);
-        world            = glm::scale(world, glm::vec3{1.f / 16.f});
-        sh.matrix        = world;
-        sh.firstPerson   = true;
+        // The entity is drawn by the level's entity pass with the world projection: scale x / y so it
+        // lands where the hand projection (`proj`, FOV 70 as in Java) would put it, and its size with it.
+        auto const& hand = *cam.projectionMatrixStack->top()._m;
+        auto const& wp   = *worldProj._m;
+        float       kx = 1.f, ky = 1.f;
+        if (wp[0][0] != 0.f && wp[1][1] != 0.f) {
+            kx = hand[0][0] / wp[0][0];
+            ky = hand[1][1] / wp[1][1];
+        }
+        glm::vec4 feet = view * glm::vec4{0.f, 0.f, 0.f, 1.f};
+        sh.feetView    = glm::vec3{feet.x * kx, feet.y * ky, feet.z};
+        sh.scale       = 0.8f * 0.5f * (kx + ky) * (c.visual.scale[0] + c.visual.scale[1] + c.visual.scale[2]) / 3.f;
+        sh.yawOffset   = c.visual.rotation[1] + (s.rotateEntitiesSideways ? 90.f : 0.f);
+        sh.firstPerson = true;
         break;
     }
     default:
@@ -370,14 +386,8 @@ void clientTick(Level& level) {
         }
     }
     if (carried && player) {
+        // Placed every frame by placeCarried; here only what must not show (SPEC §4.1: no name tag).
         if (auto* actor = level.fetchEntity(ActorUniqueID{carried}, false)) {
-            Vec2 const rot = player->getRotation();
-            // A little in front of the eyes: inside the view frustum, never at the camera.
-            float yaw = glm::radians(rot.y);
-            Vec3  at  = player->getPosition() + Vec3{-std::sin(yaw) * 1.2f, -0.9f, std::cos(yaw) * 1.2f};
-            actor->moveTo(at, Vec2{0.f, 0.f});
-            actor->setYHeadRotations(0.f, 0.f);
-            if (actor->hasCategory(ActorCategory::Mob)) static_cast<Mob*>(actor)->setYBodyRotations(0.f, 0.f);
             if (!actor->getNameTag().empty()) actor->setNameTag("");
         }
     }
@@ -414,7 +424,7 @@ LL_TYPE_INSTANCE_HOOK(
 ) {
     bool handled = false;
     try {
-        handled = renderCarried(*this, ctx, flags);
+        handled = renderCarried(*this, ctx, prevProj, flags);
     } catch (std::exception const& e) {
         static bool once = false;
         if (!once) {
@@ -425,27 +435,91 @@ LL_TYPE_INSTANCE_HOOK(
     if (!handled) origin(ctx, prevProj, flags);
 }
 
-/// The actor renderer computes the world matrix of an actor itself; the carried entity gets the
-/// first-person one, or is hidden (zero scale) in the third-person views and when not carried.
-LL_TYPE_INSTANCE_HOOK(
-    FirstPersonGlobalAnimsHook,
-    ll::memory::HookPriority::Normal,
-    ActorRenderData,
-    &ActorRenderData::applyGlobalAnims,
-    void,
-    Matrix&                 worldMatrix,
-    BaseActorRenderContext& ctx
-) {
-    origin(worldMatrix, ctx);
-    Actor* actor = this->mActor;
-    if (!actor) return;
+namespace {
+/// True for the kept entity that is the local carried visual.
+bool isCarriedActor(Actor const& actor) {
     auto& sh = shared();
-    if (!sh.carried) return; // unlocked fast path; checked again below
+    if (!sh.carried) return false; // unlocked fast path; checked again under the lock
     std::lock_guard lock(sh.mutex);
-    if (!sh.carried || actor->getOrCreateUniqueID().rawID != sh.carried) return;
-    auto* client    = currentClient();
-    bool  fp        = sh.firstPerson && client && client->getOptions().getPlayerViewPerspective() == 0;
-    *worldMatrix._m = fp ? sh.matrix : glm::scale(glm::mat4{1.f}, glm::vec3{0.f});
+    return sh.carried && const_cast<Actor&>(actor).getOrCreateUniqueID().rawID == sh.carried;
+}
+
+/// Puts the carried entity where Carry On's first-person transform puts it: its feet at the view-space
+/// position turned into the world by the camera, facing away from the camera, scaled. Previous and
+/// current values follow the player's, so the frame interpolation keeps it fixed on the screen.
+/// False: not drawn now (third-person views: U11 draws the carry there).
+bool placeCarried(Actor& actor) {
+    auto* player = currentPlayer();
+    auto* client = currentClient();
+    if (!player || !client) return false;
+    auto&           sh = shared();
+    std::lock_guard lock(sh.mutex);
+    if (!sh.firstPerson || client->getOptions().getPlayerViewPerspective() != 0) return false;
+    if (sh.baseScale <= 0.f) sh.baseScale = actor.mScale > 0.f ? static_cast<float>(actor.mScale) : 1.f;
+
+    auto offset = [&](Vec2 const& rot) {
+        glm::mat4 cam = glm::rotate(glm::mat4{1.f}, glm::radians(180.f - rot.y), kY); // yaw 0 looks south (+Z)
+        cam           = glm::rotate(cam, glm::radians(-rot.x), kX);                   // positive pitch looks down
+        glm::vec4 w   = cam * glm::vec4{sh.feetView, 1.f};
+        return Vec3{w.x, w.y, w.z};
+    };
+    auto& pv    = *player->mBuiltInComponents->mStateVectorComponent;
+    auto& pr    = *player->mBuiltInComponents->mActorRotationComponent;
+    auto& av    = *actor.mBuiltInComponents->mStateVectorComponent;
+    auto& ar    = *actor.mBuiltInComponents->mActorRotationComponent;
+    av.mPos     = pv.mPos.get() + offset(pr.mRot);
+    av.mPosPrev = pv.mPosPrev.get() + offset(pr.mRotPrev);
+    float yaw = pr.mRot->y + sh.yawOffset, yawPrev = pr.mRotPrev->y + sh.yawOffset;
+    ar.mRot     = Vec2{0.f, yaw};
+    ar.mRotPrev = Vec2{0.f, yawPrev};
+    actor.setYHeadRotations(yaw, yawPrev);
+    if (actor.hasCategory(ActorCategory::Mob)) static_cast<Mob&>(actor).setYBodyRotations(yaw, yawPrev);
+    actor.mScale     = sh.baseScale * sh.scale;
+    actor.mScalePrev = sh.baseScale * sh.scale;
+    return true;
+}
+} // namespace
+
+/// The level's entity pass (data-driven renderer v2) queues every visible actor here; the carried
+/// entity is placed for the first-person view first, or left out.
+LL_TYPE_INSTANCE_HOOK(
+    FirstPersonQueueHook,
+    ll::memory::HookPriority::Normal,
+    DataDrivenRendererV2,
+    &DataDrivenRendererV2::tryAddActor,
+    bool,
+    Actor&                                actor,
+    std::shared_ptr<ActorRenderer> const& renderer,
+    ShadowContext                         shadowContext
+) {
+    if (isCarriedActor(actor)) {
+        bool draw = false;
+        try {
+            draw = placeCarried(actor);
+        } catch (std::exception const& e) {
+            static bool once = false;
+            if (!once) {
+                once = true;
+                log().error("firstperson: placing the carried entity failed: {}", e.what());
+            }
+        }
+        if (!draw) return false;
+    }
+    return origin(actor, renderer, shadowContext);
+}
+
+/// Mobs next to the camera fade out (dithering); the carried one is always next to it.
+LL_TYPE_STATIC_HOOK(
+    FirstPersonDitherHook,
+    ll::memory::HookPriority::Normal,
+    ActorRenderer,
+    &ActorRenderer::isDitheringEnabled,
+    bool,
+    BaseActorRenderContext const& ctx,
+    Actor const&                  actor
+) {
+    if (isCarriedActor(actor)) return false;
+    return origin(ctx, actor);
 }
 
 /// Keeps the client's copy of an entity the server removes near the local player for a moment (see
@@ -484,7 +558,8 @@ class FirstPersonModule {
 public:
     void install() {
         FirstPersonRenderHook::hook();
-        FirstPersonGlobalAnimsHook::hook();
+        FirstPersonDitherHook::hook();
+        FirstPersonQueueHook::hook();
         FirstPersonRemoveActorHook::hook();
         auto& bus = ll::event::EventBus::getInstance();
         mListeners.push_back(bus.emplaceListener<ll::event::ClientExitLevelEvent>([](ll::event::ClientExitLevelEvent&) {
@@ -502,7 +577,8 @@ public:
     }
     void uninstall() {
         FirstPersonRenderHook::unhook();
-        FirstPersonGlobalAnimsHook::unhook();
+        FirstPersonDitherHook::unhook();
+        FirstPersonQueueHook::unhook();
         FirstPersonRemoveActorHook::unhook();
         auto& bus = ll::event::EventBus::getInstance();
         for (auto& l : mListeners) bus.removeListener(l);
