@@ -70,6 +70,10 @@ Invoke-HeldSelfTest 'firstperson.furnace' {
 Invoke-HeldSelfTest 'firstperson.pig' {
     Start-Sleep -Milliseconds 300
     $script:pigShot = Save-Screenshot 'pig'
+    Press-Key F5; Start-Sleep -Milliseconds 500
+    Save-Screenshot 'pig-third-back' | Out-Null
+    Press-Key F5; Start-Sleep -Milliseconds 300
+    Press-Key F5; Start-Sleep -Milliseconds 300
 } | Out-Null
 
 Save-Screenshot 'after' | Out-Null

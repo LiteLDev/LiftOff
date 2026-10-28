@@ -2,7 +2,9 @@
 
 #include "client/firstperson/FirstPerson.h"
 
+#include <chrono>
 #include <cmath>
+#include <unordered_map>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -27,6 +29,13 @@
 #include "mc/client/renderer/BaseActorRenderContext.h"
 #include "mc/client/renderer/actor/ActorRenderDispatcher.h"
 #include "mc/client/renderer/game/ItemInHandRenderer.h"
+#include "mc/client/renderer/game/LevelRendererPlayer.h"
+#include "mc/client/network/LegacyClientNetworkHandler.h"
+#include "mc/deps/nbt/Int64Tag.h"
+#include "mc/world/level/ActorGarbageCollector.h"
+#include "mc/legacy/ActorUniqueID.h"
+#include "mc/network/packet/RemoveActorPacket.h"
+#include "mc/network/packet/RemoveActorPacketPayload.h"
 #include "mc/deps/core/math/Vec2.h"
 #include "mc/deps/core/math/Vec3.h"
 #include "mc/deps/ecs/WeakEntityRef.h"
@@ -161,7 +170,45 @@ struct Cache {
     Level*                       spawnerLevel = nullptr;
     int                          dimension = -1;      ///< the dimension the display actor lives in
     bool                         logged    = false;
+    glm::mat4                    entityView{1.f};    ///< view-space transform of the carried entity
+    bool                         wantEntity = false; ///< the first-person pass asked for the entity
+    OwnerStorageEntity           owned;              ///< the real client entity, taken out of the level
 };
+
+/// Entities the server just removed near the local player, kept for a moment out of the level: when
+/// the removal is a pickup by the local player, the carried entity is this very client actor (fully
+/// initialised, with its variant, colours, age and equipment as the server sent them).
+struct Stashed {
+    OwnerStorageEntity                    owner;
+    Level*                                level = nullptr;
+    std::chrono::steady_clock::time_point at;
+};
+std::unordered_map<std::int64_t, Stashed>& stash() {
+    static auto* s = new std::unordered_map<std::int64_t, Stashed>;
+    return *s;
+}
+constexpr auto  kStashTime   = std::chrono::seconds(3);
+constexpr float kStashRadius = 64.f;
+
+/// Destroys an entity taken out of `level` (only while that level is the current one).
+void destroyTaken(OwnerStorageEntity& owner, Level* level) {
+    if (!owner.has_value()) return;
+    auto* client = currentClient();
+    if (level && client && client->getLevel() == level) {
+        level->mActorGarbageCollector->garbageCollectEntity(OwnerPtr<EntityContext>(std::move(owner)));
+    }
+    owner.reset();
+}
+
+/// Drops stashed entities that nobody claimed in time (or all of them).
+void pruneStash(bool all) {
+    auto now = std::chrono::steady_clock::now();
+    std::erase_if(stash(), [&](auto& kv) {
+        if (!all && now - kv.second.at < kStashTime) return false;
+        destroyTaken(kv.second.owner, kv.second.level);
+        return true;
+    });
+}
 
 Cache& cache() {
     // Never destroyed: the item stack must not be torn down after the game at process exit.
@@ -194,7 +241,7 @@ bool sameVisual(CarryData const& a, CarryData const& b) {
 Actor* cachedActor() {
     auto& c = cache();
     if (!c.entity.has_value()) return nullptr;
-    return c.entity->tryUnwrap<Actor>().as_ptr();
+    return c.entity->tryUnwrap<Actor, true>().as_ptr();
 }
 
 /// Where the display actor waits between frames: above the build limit, out of sight (the level
@@ -207,6 +254,11 @@ Vec3 parkPos(LocalPlayer& player) {
 /// Removes the display actor. `levelAlive` false: the level (and the actor with it) is gone.
 void releaseActor(bool levelAlive) {
     auto& c = cache();
+    if (c.owned.has_value()) {
+        if (levelAlive) destroyTaken(c.owned, c.level);
+        c.owned.reset();
+        c.entity.reset();
+    }
     if (c.entity.has_value()) {
         if (levelAlive && c.spawner && c.spawnerLevel == c.level && cachedActor()) c.spawner->removeDisplayEntity();
         c.entity.reset();
@@ -222,8 +274,9 @@ void resetCache(bool levelAlive) {
     c.visual = {};
     c.what.clear();
     c.item   = ItemStack{};
-    c.chest  = false;
-    c.logged = false;
+    c.chest      = false;
+    c.logged     = false;
+    c.wantEntity = false;
     setStatus(DrawStatus::Kind::None, {}, false);
 }
 
@@ -279,6 +332,28 @@ void buildActor(LocalPlayer& player, std::string const& snbt) {
     if (!level) return;
     auto id = carry::entityIdOf(snbt);
     if (id.empty()) return;
+    auto tag = carry::parseNbt(snbt);
+
+    // The client's own copy of the entity the server just removed for the pickup.
+    if (tag && tag->contains("UniqueID") && tag->at("UniqueID").hold(Tag::Int64)) {
+        auto uid = tag->at("UniqueID").get<Int64Tag>().data;
+        if (auto it = stash().find(uid); it != stash().end() && it->second.level == level) {
+            c.owned.emplace(*it->second.owner);
+            it->second.owner.reset();
+            stash().erase(it);
+            c.level     = level;
+            c.dimension = static_cast<int>(player.getDimensionId());
+            c.entity    = c.owned->getWeakRef();
+            if (auto* actor = cachedActor()) {
+                actor->setNameTag("");
+                zeroRotations(*actor);
+                log().info("firstperson: carrying the client's own {}", id);
+                return;
+            }
+            releaseActor(true);
+        }
+    }
+
     ActorDefinitionIdentifier def(id);
     if (!c.spawner || c.spawnerLevel != level) {
         c.spawner      = new CarrySpawner(def); // the old level's spawner (if any) is abandoned with its level
@@ -298,7 +373,7 @@ void buildActor(LocalPlayer& player, std::string const& snbt) {
     c.entity    = actor->getEntityContext().getWeakRef();
     c.level     = level;
     c.dimension = static_cast<int>(player.getDimensionId());
-    if (auto tag = carry::parseNbt(snbt)) applyLook(*actor, *tag);
+    if (tag) applyLook(*actor, *tag);
     actor->setNameTag("");
     zeroRotations(*actor);
     actor->_setPos(parkPos(player));
@@ -341,10 +416,10 @@ struct ActorAtPlayer {
     Actor&       actor;
     LocalPlayer& player;
     ActorAtPlayer(Actor& a, LocalPlayer& p) : actor(a), player(p) {
-        actor._setPos(player.getPosition());
+        actor.moveTo(player.getPosition(), Vec2{0.f, 0.f});
         zeroRotations(actor);
     }
-    ~ActorAtPlayer() { actor._setPos(parkPos(player)); }
+    ~ActorAtPlayer() { actor.moveTo(parkPos(player), Vec2{0.f, 0.f}); }
     ActorAtPlayer(ActorAtPlayer const&)            = delete;
     ActorAtPlayer& operator=(ActorAtPlayer const&) = delete;
 };
@@ -352,6 +427,7 @@ struct ActorAtPlayer {
 /// Draws the local player's carry instead of the hand. False: not carrying a block or an entity (the
 /// vanilla hand renders; Carry On draws nothing in first person for a carried player).
 bool renderCarried(ItemInHandRenderer& self, BaseActorRenderContext& ctx, ItemContextFlags flags) {
+    if (!stash().empty()) pruneStash(false);
     auto* player = currentPlayer();
     auto* data   = player ? lo::client::carry::localData() : nullptr;
     if (!data || !(data->isBlock() || data->isEntity())) {
@@ -360,7 +436,15 @@ bool renderCarried(ItemInHandRenderer& self, BaseActorRenderContext& ctx, ItemCo
     }
     auto& c = cache();
     // Rebuilt when the carry changes, and the display actor when the player changed dimension.
-    if (!c.data || !sameVisual(*c.data, *data)
+    // Also when the client's own copy of the carried entity shows up after the carry sync.
+    bool ownCopyArrived = false;
+    if (c.data && c.visual.kind == CarryVisual::Kind::Entity && !c.owned.has_value() && !stash().empty()) {
+        if (auto tag = carry::parseNbt(data->entity); tag && tag->contains("UniqueID")
+                                                      && tag->at("UniqueID").hold(Tag::Int64)) {
+            ownCopyArrived = stash().contains(tag->at("UniqueID").get<Int64Tag>().data);
+        }
+    }
+    if (!c.data || !sameVisual(*c.data, *data) || ownCopyArrived
         || (c.entity.has_value() && c.dimension != static_cast<int>(player->getDimensionId()))) {
         rebuild(*data, *player);
     }
@@ -394,14 +478,22 @@ bool renderCarried(ItemInHandRenderer& self, BaseActorRenderContext& ctx, ItemCo
         kind        = DrawStatus::Kind::Entity;
         auto* actor = cachedActor();
         if (!actor) break;
-        ActorAtPlayer at(*actor, *player);
-        auto const&   ppos = player->getPosition();
-        float         h    = carry::entityHeight(*actor);
-        float         w    = carry::entityWidth(*actor);
-        auto          ref  = cam.worldMatrixStack->push(false);
-        auto&         m    = *ref.mat->_m;
-        m                  = m * base * entityTransform(h, w, s.rotateEntitiesSideways, c.visual);
-        ctx.mEntityRenderDispatcher->render(ctx, *actor, ppos, ppos, Vec2{0.f, 0.f}, false);
+        // Drawn in the world pass (drawCarriedEntity): actors drawn from this pass do not show.
+        c.entityView = base
+                     * entityTransform(
+                           carry::entityHeight(*actor),
+                           carry::entityWidth(*actor),
+                           s.rotateEntitiesSideways,
+                           c.visual
+                     );
+        c.wantEntity = true;
+        if (c.owned.has_value()) { // TEMP: the client's own actor, drawn right here
+            ActorAtPlayer at(*actor, *player);
+            auto const&   ppos = player->getPosition();
+            auto          ref  = cam.worldMatrixStack->push(false);
+            *ref.mat->_m       = *ref.mat->_m * c.entityView;
+            ctx.mEntityRenderDispatcher->render(ctx, *actor, ppos, ppos, Vec2{0.f, 0.f}, false);
+        }
         break;
     }
     default:
@@ -413,6 +505,47 @@ bool renderCarried(ItemInHandRenderer& self, BaseActorRenderContext& ctx, ItemCo
         log().info("firstperson: drawing {} {}", carry::carryTypeName(data->type), c.what);
     }
     return true;
+}
+
+/// Draws the carried entity in first person. Called from the world's block-entity pass, the pass in
+/// which vanilla draws the mob of a spawner (an actor that is not in the level's list); actors drawn
+/// from the first-person item pass do not show. The view-space transform of the first-person pass is
+/// turned back into a world matrix, with the hand's FOV-70 projection, as for the block.
+void drawCarriedEntity(BaseActorRenderContext& ctx) {
+    auto& c = cache();
+    if (!c.wantEntity || c.visual.kind != CarryVisual::Kind::Entity) return;
+    auto* client = currentClient();
+    auto* player = currentPlayer();
+    if (!client || !player || client->getOptions().getPlayerViewPerspective() != 0) return;
+    auto* data = lo::client::carry::localData();
+    if (!data || !data->isEntity() || !c.data || !sameVisual(*c.data, *data)) return;
+    auto* actor = cachedActor();
+    if (!actor) return;
+
+    auto&       cam    = ctx.mScreenContext.camera;
+    auto const  view   = *cam.viewMatrixStack->top()._m;
+    auto        proj   = cam.projectionMatrixStack->push(false);
+    auto&       p      = *proj.mat->_m;
+    float       aspect = p[0][0] != 0.f ? p[1][1] / p[0][0] : 16.f / 9.f;
+    p[1][1]            = 1.f / std::tan(glm::radians(35.f)); // Java's hand FOV (70)
+    p[0][0]            = p[1][1] / aspect;
+    auto world         = cam.worldMatrixStack->push(false);
+    *world.mat->_m     = glm::inverse(view) * c.entityView;
+
+    ActorAtPlayer at(*actor, *player);
+    auto const&   ppos = player->getPosition();
+    if (!c.owned.has_value()) ctx.mEntityRenderDispatcher->render(ctx, *actor, ppos, ppos, Vec2{0.f, 0.f}, false);
+    { // TEMP diagnostic: plain world placement 3 blocks south-east of the player
+        auto w2 = cam.worldMatrixStack->push(false);
+        *w2.mat->_m = glm::mat4{1.f};
+        auto const& tgt = ctx.mImpl->mCameraTargetPosition.get();
+        ctx.mEntityRenderDispatcher->render(ctx, *actor, tgt, ppos + Vec3{2.f, -1.6f, 3.f}, Vec2{0.f, 0.f}, false);
+    }
+    static bool once = false;
+    if (!once) {
+        once = true;
+        log().info("firstperson: world-pass entity draw, box {}x{}", carry::entityWidth(*actor), carry::entityHeight(*actor));
+    }
 }
 
 } // namespace
@@ -447,16 +580,82 @@ LL_TYPE_INSTANCE_HOOK(
     if (!handled) origin(ctx, prevProj, flags);
 }
 
+LL_TYPE_INSTANCE_HOOK(
+    FirstPersonEntityHook,
+    ll::memory::HookPriority::Normal,
+    LevelRendererPlayer,
+    &LevelRendererPlayer::$renderBlockEntities,
+    void,
+    BaseActorRenderContext& ctx,
+    bool                    renderAlphaLayer
+) {
+    origin(ctx, renderAlphaLayer);
+    if (renderAlphaLayer) return;
+    try {
+        drawCarriedEntity(ctx);
+    } catch (std::exception const& e) {
+        static bool once = false;
+        if (!once) {
+            once = true;
+            log().error("firstperson: drawing the carried entity failed: {}", e.what());
+        }
+    }
+}
+
+/// Keeps the client's copy of an entity the server removes near the local player for a moment (see
+/// `Stashed`) instead of destroying it; unclaimed copies are destroyed after `kStashTime`.
+LL_TYPE_INSTANCE_HOOK(
+    FirstPersonRemoveActorHook,
+    ll::memory::HookPriority::Normal,
+    LegacyClientNetworkHandler,
+    &LegacyClientNetworkHandler::$handle,
+    void,
+    NetworkIdentifier const& source,
+    RemoveActorPacket const& packet
+) {
+    try {
+        auto* client = currentClient();
+        auto* level  = client ? client->getLevel() : nullptr;
+        auto* player = currentPlayer();
+        if (level && player && lo::client::carry::serverHasMod()) {
+            ActorUniqueID id    = packet.mEntityId;
+            Actor*        actor = level->fetchEntity(id, false);
+            if (actor && actor != player && !actor->isPlayer() && actor->hasCategory(ActorCategory::Mob)
+                && actor->getPosition().distanceTo(player->getPosition()) <= kStashRadius) {
+                auto owner = level->removeEntity(*actor);
+                if (owner.has_value()) {
+                    auto& slot = stash()[id.rawID];
+                    destroyTaken(slot.owner, slot.level);
+                    slot.owner.emplace(*owner);
+                    slot.level = level;
+                    slot.at    = std::chrono::steady_clock::now();
+                    return;
+                }
+            }
+        }
+    } catch (std::exception const& e) {
+        log().error("firstperson: keeping a removed entity failed: {}", e.what());
+    }
+    origin(source, packet);
+}
+
 class FirstPersonModule {
 public:
     void install() {
         FirstPersonRenderHook::hook();
+        FirstPersonEntityHook::hook();
+        FirstPersonRemoveActorHook::hook();
         mExit = ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientExitLevelEvent>(
-            [](ll::event::ClientExitLevelEvent&) { resetCache(true); }
+            [](ll::event::ClientExitLevelEvent&) {
+                resetCache(true);
+                pruneStash(true);
+            }
         );
     }
     void uninstall() {
         FirstPersonRenderHook::unhook();
+        FirstPersonEntityHook::unhook();
+        FirstPersonRemoveActorHook::unhook();
         if (mExit) ll::event::EventBus::getInstance().removeListener(mExit);
         mExit.reset();
         resetCache(false);
