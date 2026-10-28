@@ -215,8 +215,8 @@ LO_REGISTER_SELFTEST("carry.pickup_checks", [](Context& ctx) -> ll::coro::CoroTa
 });
 
 LO_REGISTER_SELFTEST("carry.capture_chest", [](Context& ctx) -> ll::coro::CoroTask<> {
-    auto from = ctx.testPos(10);
-    auto to   = ctx.testPos(14);
+    auto from = ctx.testPos(11);
+    auto to   = ctx.testPos(15);
     ctx.require(co_await ctx.ensureLoaded(from), "test area loaded");
     ctx.require(ctx.setBlock(from, "minecraft:chest"), "chest placed");
     ctx.cleanupBlock(to);

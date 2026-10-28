@@ -27,12 +27,34 @@ PlacementStateResolver& resolver() {
     return r;
 }
 
-/// The hooks sorted by priority (highest first), stable for equal priorities.
-std::vector<PickupHooks const*> sortedHooks() {
-    std::vector<PickupHooks const*> v;
-    for (auto const& h : PickupHookRegistry::entries()) v.push_back(&h);
-    std::stable_sort(v.begin(), v.end(), [](auto* a, auto* b) { return a->priority > b->priority; });
-    return v;
+/// Registry entries sorted by priority (highest first, stable). Registries are filled at static init,
+/// so the order is computed once (again only if an entry was added later).
+template <class Entry>
+std::vector<Entry const*> const& sortedByPriority(std::vector<Entry> const& all) {
+    static std::vector<Entry const*> sorted;
+    static Entry const*              first = nullptr;
+    if (sorted.size() != all.size() || (!all.empty() && first != &all.front())) {
+        sorted.clear();
+        for (auto const& e : all) sorted.push_back(&e);
+        std::stable_sort(sorted.begin(), sorted.end(), [](auto* a, auto* b) { return a->priority > b->priority; });
+        first = all.empty() ? nullptr : &all.front();
+    }
+    return sorted;
+}
+
+std::vector<PickupHooks const*> const& sortedHooks() { return sortedByPriority(PickupHookRegistry::entries()); }
+
+/// The per-tick stage logs only the first failure of each hook (no per-tick logging).
+template <class F>
+void guardedQuiet(PickupHooks const& h, F&& fn) {
+    try {
+        fn();
+    } catch (std::exception const& e) {
+        static std::vector<PickupHooks const*> reported;
+        if (std::find(reported.begin(), reported.end(), &h) != reported.end()) return;
+        reported.push_back(&h);
+        log().error("carry hook '{}' (onLoop) failed: {} (later failures are not logged)", h.name, e.what());
+    }
 }
 
 template <class F>
@@ -154,10 +176,7 @@ CarryVisual visualFor(CarryData const& data) {
         v.kind   = CarryVisual::Kind::Entity;
         v.entity = data.entity;
     }
-    std::vector<VisualProvider const*> providers;
-    for (auto const& p : VisualProviderRegistry::entries()) providers.push_back(&p);
-    std::stable_sort(providers.begin(), providers.end(), [](auto* a, auto* b) { return a->priority > b->priority; });
-    for (auto* p : providers) {
+    for (auto* p : sortedByPriority(VisualProviderRegistry::entries())) {
         if (!p->apply) continue;
         try {
             p->apply(data, v);
@@ -189,20 +208,11 @@ public:
         });
         if (!anyLoop) return;
         mListener = ll::event::EventBus::getInstance().emplaceListener<ll::event::ServerLevelTickEvent>([](auto&) {
-            auto hooks = sortedHooks();
+            auto const& hooks = sortedHooks();
             forEachCarrier([&](Player& player, CarryData const& data) {
                 CarryData copy = data; // hooks may change the carry
                 for (auto* h : hooks) {
-                    if (!h->onLoop) continue;
-                    guarded(
-                        *h,
-                        "onLoop",
-                        [&] {
-                            h->onLoop(player, copy);
-                            return true;
-                        },
-                        true
-                    );
+                    if (h->onLoop) guardedQuiet(*h, [&] { h->onLoop(player, copy); });
                 }
             });
         });

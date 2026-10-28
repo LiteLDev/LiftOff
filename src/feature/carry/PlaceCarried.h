@@ -32,7 +32,8 @@ struct PlaceResult {
 ///   player's own block position, overwriting it. Block actor restored. No event, no sound.
 /// - entity: recreated (same UniqueID) at the position.
 /// - player: the carried player is ejected (StartRidingOther false to modded clients).
-/// Returns `placed = false` when the player carries nothing.
+/// Returns `placed = false` (and keeps the carry) when the player carries nothing or nothing could be
+/// placed (no valid spot, e.g. outside the world; unknown block / entity): a carry is never lost here.
 PlaceResult placeCarried(Player& player);
 /// The same at `pos` in `region` (e.g. the death position and dimension).
 PlaceResult placeCarriedAt(Player& player, BlockSource& region, Vec3 const& pos);

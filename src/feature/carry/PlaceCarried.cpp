@@ -30,28 +30,38 @@ namespace lo::feature::carry {
 namespace {
 constexpr int kSearchRadius = 14;
 
+/// Offsets of the cube -14..+14 sorted by distance (stable: x fastest, then y, then z, like Java's
+/// BlockPos.betweenClosed). Computed once.
+std::vector<BlockPos> const& searchOffsets() {
+    static std::vector<BlockPos> const offsets = [] {
+        std::vector<BlockPos> v;
+        v.reserve((2 * kSearchRadius + 1) * (2 * kSearchRadius + 1) * (2 * kSearchRadius + 1));
+        for (int dz = -kSearchRadius; dz <= kSearchRadius; ++dz)
+            for (int dy = -kSearchRadius; dy <= kSearchRadius; ++dy)
+                for (int dx = -kSearchRadius; dx <= kSearchRadius; ++dx) v.emplace_back(dx, dy, dz);
+        std::stable_sort(v.begin(), v.end(), [](BlockPos const& a, BlockPos const& b) {
+            return a.x * a.x + a.y * a.y + a.z * a.z < b.x * b.x + b.y * b.y + b.z * b.z;
+        });
+        return v;
+    }();
+    return offsets;
+}
+
 Vec3 toVec(BlockPos const& p) { return Vec3{static_cast<float>(p.x), static_cast<float>(p.y), static_cast<float>(p.z)}; }
 
 PlaceResult placeBlock(Player& player, BlockSource& region, BlockPos const& origin, CarryData const& data) {
     PlaceResult  r;
     Block const* stored = carriedBlock(data);
     if (!stored) {
-        log().warn("carry: the carried block of {} is unknown; dropping it", player.getRealName());
+        log().warn("carry: the carried block of {} is unknown; it stays carried", player.getRealName());
         return r;
     }
     Block const& state = resolvePlacementState(player, region, origin, *stored, /*down*/ 0, toVec(origin));
 
-    std::vector<BlockPos> candidates;
-    candidates.reserve((2 * kSearchRadius + 1) * (2 * kSearchRadius + 1) * (2 * kSearchRadius + 1));
-    for (int dz = -kSearchRadius; dz <= kSearchRadius; ++dz)
-        for (int dy = -kSearchRadius; dy <= kSearchRadius; ++dy)
-            for (int dx = -kSearchRadius; dx <= kSearchRadius; ++dx) candidates.emplace_back(dx, dy, dz);
-    std::stable_sort(candidates.begin(), candidates.end(), [](BlockPos const& a, BlockPos const& b) {
-        return a.x * a.x + a.y * a.y + a.z * a.z < b.x * b.x + b.y * b.y + b.z * b.z;
-    });
-
+    // Fallback: the player's own position (overwritten), kept inside the world's height range.
     BlockPos target = origin;
-    for (auto const& d : candidates) {
+    target.y = std::clamp(target.y, static_cast<int>(region.getMinHeight()), static_cast<int>(region.getMaxHeight()) - 1);
+    for (auto const& d : searchOffsets()) {
         BlockPos p{origin.x + d.x, origin.y + d.y, origin.z + d.z};
         if (canPlaceBlockAt(region, p, state)) {
             target = p;
@@ -118,6 +128,11 @@ PlaceResult placeCarriedAt(Player& player, BlockSource& region, Vec3 const& pos)
     }
     default:
         break;
+    }
+    if (!r.placed) {
+        // Never lose a carry: it stays (e.g. no valid spot inside the world); the caller may retry.
+        log().warn("carry: could not place what {} carries; it stays carried", player.getRealName());
+        return r;
     }
     clear(player);
     removeSlowness(player);

@@ -26,6 +26,18 @@ std::optional<bool> asBool(std::string_view v) {
 }
 } // namespace
 
+namespace {
+bool piecesMatch(std::vector<std::string> const& pieces, std::string_view id) {
+    std::size_t pos = 0;
+    for (auto const& piece : pieces) {
+        auto at = id.find(piece, pos);
+        if (at == std::string_view::npos) return false;
+        pos = at + piece.size();
+    }
+    return true;
+}
+} // namespace
+
 bool wildcardMatch(std::string_view pattern, std::string_view id) {
     std::size_t pos = 0;
     while (true) {
@@ -114,7 +126,7 @@ bool ListEntry::matchesId(Candidate const& c) const {
     case Kind::Id:
         return c.id == text;
     case Kind::Wildcard:
-        return wildcardMatch(text, c.id);
+        return piecesMatch(pieces, c.id);
     case Kind::Tag:
         return c.hasTag && c.hasTag(text);
     }

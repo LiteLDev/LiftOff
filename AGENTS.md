@@ -58,7 +58,7 @@ reference it with `tr(key, "English fallback")` without defining it.
 | Macro | Header | Purpose |
 | ----- | ------ | ------- |
 | `LO_REGISTER_MODULE(T)` / `LO_REGISTER_MODULE_ORDERED(T, order)` | `mod/Module.h` | `T` has `install()`/`uninstall()` (+ optional `load()`, + optional `static T& get()`). |
-| `LO_REGISTER_CONFIG("section", T)` | `mod/Config.h` | Reflectable struct with `int version`; file `config/<section>.json`; `lo::config::get<T>()`. One section per unit. |
+| `LO_REGISTER_CONFIG("section", T)` | `mod/Config.h` | Reflectable struct with `int version`; file `config/<section>.json`; `lo::config::get<T>()`. One section per unit (the spine has two: `carryon` and `carryon_client`, Carry On's common and client files). |
 | `LO_REGISTER_SUBCOMMAND(fn)` | `mod/Commands.h` | Adds overloads to `/carryon` (alias `/liftoff`). `commands::playerOf`, `commands::isAdmin`. |
 | `LO_REGISTER_SELFTEST("unit.case", fn)` | `selftest/SelfTest.h` | `fn(Context&)` or `ll::coro::CoroTask<>(Context&)`. |
 | `LO_REGISTER_PICKUP_HOOKS(PickupHooks{...})` | `feature/carry/Hooks.h` | Pickup / placement stages: `overrideChecks`, `customCondition`, `protection`, `beforePickup`, `placeProtection`, `onPlace`, `onLoop` (scripts, custom conditions, land protection). |

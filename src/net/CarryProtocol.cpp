@@ -43,7 +43,7 @@ using Json = nlohmann::json;
 using feature::carry::CarryData;
 
 namespace {
-constexpr std::uint64_t kMaxPayload = 1u << 22; ///< 4 MiB of JSON
+constexpr std::uint64_t kMaxPayload = 1ull << 27; ///< 128 MiB of JSON (a chest of full shulker boxes is large)
 
 void writeJson(BinaryStream& s, Json const& j) {
     s.writeString(j.dump(-1, ' ', false, Json::error_handler_t::replace), nullptr, nullptr);
@@ -53,7 +53,7 @@ Bedrock::Result<void> readJson(ReadOnlyBinaryStream& s, Json& out) {
     auto str = s.getString(kMaxPayload);
     if (!str) return nonstd::make_unexpected(str.error());
     out = Json::parse(*str, nullptr, false);
-    if (out.is_discarded()) out = Json::object();
+    if (!out.is_object()) out = Json::object(); // handlers only read objects
     return {};
 }
 } // namespace
@@ -290,51 +290,69 @@ void onConnected(std::function<void()> fn) { state().connectedListeners.push_bac
 
 namespace lo::net {
 
+/// Runs a client handler body; a malformed payload must never throw into the game's packet dispatch.
+template <class F>
+void safely(char const* what, F&& fn) {
+    try {
+        fn();
+    } catch (std::exception const& e) {
+        log().error("net: bad {} from the server: {}", what, e.what());
+    }
+}
+
 class WelcomeHandler : public ll::network::PacketHandlerBase<WelcomeHandler, WelcomePacket> {
 public:
     void handlePacket(NetworkIdentifier const&, NetEventCallback&, WelcomePacket const& packet) const {
-        auto& s = client::carry::state();
-        if (s.welcomed) return;
-        s.welcomed = true;
-        log().info("net: the server runs LiftOff (protocol {})", packet.payload.value("protocol", 0));
-        client::carry::fire(s.connectedListeners, "connected");
+        safely("WelcomePacket", [&] {
+            auto& s = client::carry::state();
+            if (s.welcomed) return;
+            s.welcomed = true;
+            log().info("net: the server runs LiftOff (protocol {})", packet.payload.value("protocol", 0));
+            client::carry::fire(s.connectedListeners, "connected");
+        });
     }
 };
 
 class CarrySyncHandler : public ll::network::PacketHandlerBase<CarrySyncHandler, CarrySyncPacket> {
 public:
     void handlePacket(NetworkIdentifier const&, NetEventCallback&, CarrySyncPacket const& packet) const {
-        auto& s       = client::carry::state();
-        auto  carrier = packet.payload.value("carrier", std::int64_t{0});
-        auto  data    = CarryData::fromJson(packet.payload.value("data", Json::object()));
-        if (data.isCarrying()) s.mirror[carrier] = data;
-        else s.mirror.erase(carrier);
-        client::carry::fire(s.syncListeners, "sync", carrier, data);
+        safely("CarrySyncPacket", [&] {
+            auto& s       = client::carry::state();
+            auto  carrier = packet.payload.value("carrier", std::int64_t{0});
+            auto  data    = CarryData::fromJson(packet.payload.value("data", Json::object()));
+            if (data.isCarrying()) s.mirror[carrier] = data;
+            else s.mirror.erase(carrier);
+            client::carry::fire(s.syncListeners, "sync", carrier, data);
+        });
     }
 };
 
 class StartRidingHandler : public ll::network::PacketHandlerBase<StartRidingHandler, StartRidingPacket> {
 public:
     void handlePacket(NetworkIdentifier const&, NetEventCallback&, StartRidingPacket const& packet) const {
-        client::carry::fire(
-            client::carry::state().ridingListeners,
-            "start riding",
-            packet.payload.value("entity", std::int64_t{0}),
-            packet.payload.value("ride", false)
-        );
+        safely("StartRidingPacket", [&] {
+            client::carry::fire(
+                client::carry::state().ridingListeners,
+                "start riding",
+                packet.payload.value("entity", std::int64_t{0}),
+                packet.payload.value("ride", false)
+            );
+        });
     }
 };
 
 class StartRidingOtherHandler : public ll::network::PacketHandlerBase<StartRidingOtherHandler, StartRidingOtherPacket> {
 public:
     void handlePacket(NetworkIdentifier const&, NetEventCallback&, StartRidingOtherPacket const& packet) const {
-        client::carry::fire(
-            client::carry::state().ridingOtherListeners,
-            "start riding other",
-            packet.payload.value("mount", std::int64_t{0}),
-            packet.payload.value("rider", std::int64_t{0}),
-            packet.payload.value("ride", false)
-        );
+        safely("StartRidingOtherPacket", [&] {
+            client::carry::fire(
+                client::carry::state().ridingOtherListeners,
+                "start riding other",
+                packet.payload.value("mount", std::int64_t{0}),
+                packet.payload.value("rider", std::int64_t{0}),
+                packet.payload.value("ride", false)
+            );
+        });
     }
 };
 #endif

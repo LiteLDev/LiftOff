@@ -61,7 +61,7 @@ bool removeCarriedBlock(BlockSource& region, BlockPos const& pos);
 /// block actor rebuilt from the stored NBT at the new position (x/y/z rewritten, chest pairing
 /// dropped), chests re-paired with a matching neighbour, the block actor data sent to clients, water
 /// put in the liquid layer when `waterlog`. Neighbour updates (flags 3). No sound, no event.
-/// Returns false if the block could not be set.
+/// Returns false (nothing changed) if the block or its block actor could not be set.
 bool restoreBlock(BlockSource& region, BlockPos const& pos, CarryData const& data, Block const* state = nullptr, bool waterlog = false);
 
 // ---- entities ---------------------------------------------------------------------------------

@@ -161,7 +161,11 @@ bool restoreBlock(BlockSource& region, BlockPos const& pos, CarryData const& dat
                 actor = BlockActor::loadStatic(block->getBlockType(), pos, *level, *tag, helper);
             }
         }
-        if (!actor) log().warn("carry: could not rebuild the block actor of {} at {} {} {}", block->getTypeName(), pos.x, pos.y, pos.z);
+        if (!actor) {
+            // Never place the block without its contents.
+            log().warn("carry: could not rebuild the block actor of {} at {} {} {}", block->getTypeName(), pos.x, pos.y, pos.z);
+            return false;
+        }
     }
     BlockChangeContext ctx{};
     bool ok = actor ? region.setBlock(pos, *block, kUpdateAll, actor, nullptr, ctx) : game::setBlock(region, pos, *block);
