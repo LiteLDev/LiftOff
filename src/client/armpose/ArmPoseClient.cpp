@@ -15,6 +15,8 @@
 #include "ll/api/event/world/ClientLevelTickEvent.h"
 
 #include "mc/deps/core/string/HashedString.h"
+#include "mc/legacy/ActorRuntimeID.h"
+#include "mc/legacy/ActorUniqueID.h"
 #include "mc/util/MolangScriptArg.h"
 #include "mc/util/MolangVariableMap.h"
 #include "mc/molang/MolangVersion.h"
