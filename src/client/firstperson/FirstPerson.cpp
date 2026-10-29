@@ -167,6 +167,9 @@ Cache& cache() {
 
 constexpr auto  kKeepTime   = std::chrono::seconds(3);
 constexpr float kKeepRadius = 64.f;
+/// The carried entity is drawn this many times farther and bigger than Carry On's transform says: the
+/// same picture, but out of the range in which the game fades mobs next to the camera.
+constexpr float kDepthFactor = 2.5f;
 
 /// State shared by the render and client threads.
 struct Shared {
@@ -175,9 +178,11 @@ struct Shared {
     std::unordered_map<std::int64_t, std::chrono::steady_clock::time_point> kept;
     std::int64_t              carried = 0;   ///< the kept entity that is the local player's carried visual (0: none)
     glm::vec3                 feetView{0.f}; ///< where its feet are in view space (Carry On's transform)
-    float                     scale       = 1.f;   ///< its size relative to normal
-    float                     yawOffset   = 0.f;   ///< its yaw relative to the camera (sideways, script)
-    float                     baseScale   = 0.f;   ///< its own scale (baby...), read when it became the carry
+    float                     scale       = 1.f; ///< its size relative to normal
+    float                     yawOffset   = 0.f; ///< its yaw relative to the camera (sideways, script)
+    float                     baseScale   = 0.f; ///< its own scale (baby...), read when it became the carry
+    float                     baseHeight  = 0.f; ///< its box before we scaled it
+    float                     baseWidth   = 0.f;
     bool                      firstPerson = false; ///< drawn in first person this frame
     std::vector<std::int64_t> remove;              ///< kept entities to delete now (client thread)
 };
@@ -221,6 +226,8 @@ void dropCarriedEntity() {
     s.carried     = 0;
     s.firstPerson = false;
     s.baseScale   = 0.f;
+    s.baseHeight  = 0.f;
+    s.baseWidth   = 0.f;
 }
 
 void resetCache() {
@@ -326,14 +333,13 @@ bool renderCarried(
             sh.firstPerson = false;
             break;
         }
-        actorAlive     = true;
-        glm::mat4 view = base
-                       * entityTransform(
-                             carry::entityHeight(*actor),
-                             carry::entityWidth(*actor),
-                             s.rotateEntitiesSideways,
-                             c.visual
-                       );
+        actorAlive = true;
+        // Its size before we scale it (the box follows the scale).
+        if (sh.baseHeight <= 0.f) {
+            sh.baseHeight = carry::entityHeight(*actor);
+            sh.baseWidth  = carry::entityWidth(*actor);
+        }
+        glm::mat4 view = base * entityTransform(sh.baseHeight, sh.baseWidth, s.rotateEntitiesSideways, c.visual);
         // The entity is drawn by the level's entity pass with the world projection: scale x / y so it
         // lands where the hand projection (`proj`, FOV 70 as in Java) would put it, and its size with it.
         auto const& hand = *cam.projectionMatrixStack->top()._m;
@@ -465,7 +471,7 @@ bool placeCarried(Actor& actor) {
     auto offset = [&](Vec2 const& rot) {
         glm::mat4 cam = glm::rotate(glm::mat4{1.f}, glm::radians(180.f - rot.y), kY); // yaw 0 looks south (+Z)
         cam           = glm::rotate(cam, glm::radians(-rot.x), kX);                   // positive pitch looks down
-        glm::vec4 w   = cam * glm::vec4{sh.feetView, 1.f};
+        glm::vec4 w   = cam * glm::vec4{sh.feetView * kDepthFactor, 1.f};
         return Vec3{w.x, w.y, w.z};
     };
     auto& pv    = *player->mBuiltInComponents->mStateVectorComponent;
@@ -479,13 +485,19 @@ bool placeCarried(Actor& actor) {
     ar.mRotPrev = Vec2{0.f, yawPrev};
     actor.setYHeadRotations(yaw, yawPrev);
     if (actor.hasCategory(ActorCategory::Mob)) static_cast<Mob&>(actor).setYBodyRotations(yaw, yawPrev);
-    actor.mScale     = sh.baseScale * sh.scale;
-    actor.mScalePrev = sh.baseScale * sh.scale;
+    actor.mScale     = sh.baseScale * sh.scale * kDepthFactor;
+    actor.mScalePrev = sh.baseScale * sh.scale * kDepthFactor;
     static bool once = false;
     if (!once) {
         once = true;
-        log().info("firstperson: entity placed, feet ({}, {}, {}) in view, scale {} x {}", sh.feetView.x,
-                   sh.feetView.y, sh.feetView.z, sh.baseScale, sh.scale);
+        log().info(
+            "firstperson: entity placed, feet ({}, {}, {}) in view, scale {} x {}",
+            sh.feetView.x,
+            sh.feetView.y,
+            sh.feetView.z,
+            sh.baseScale,
+            sh.scale
+        );
     }
     return true;
 }
@@ -537,17 +549,17 @@ LL_TYPE_INSTANCE_HOOK(
         fp = sh.carried && sh.firstPerson;
     }
     if (!ctx || !fp) return origin(data);
-    float dither                    = ctx->mActorDitheringMaxDistance;
-    bool  meshDither                = ctx->mScreenContext.isDitheringEnabled;
-    ctx->mActorDitheringMaxDistance = 0.f;
+    float dither                           = ctx->mActorDitheringMaxDistance;
+    bool  meshDither                       = ctx->mScreenContext.isDitheringEnabled;
+    ctx->mActorDitheringMaxDistance        = 0.f;
     ctx->mScreenContext.isDitheringEnabled = false;
-    static bool once                = false;
+    static bool once                       = false;
     if (!once) {
         once = true;
         log().info("firstperson: entity frame dithering distance {}, mesh dithering {}", dither, meshDither);
     }
-    uint result                     = origin(data);
-    ctx->mActorDitheringMaxDistance = dither;
+    uint result                            = origin(data);
+    ctx->mActorDitheringMaxDistance        = dither;
     ctx->mScreenContext.isDitheringEnabled = meshDither;
     return result;
 }
