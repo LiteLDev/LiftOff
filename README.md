@@ -25,8 +25,10 @@ of the carried block or mob (a carried chest shows no block), but no first-perso
 
 ### Differences from Carry On
 
-- In first person a carried mob stays upright when you look up or down, can be hidden by a wall closer than about
-  2.5 blocks, and is not drawn if your client never saw the pickup (for example after rejoining while carrying).
+- In first person a carried mob is a client-side stand-in of its type: its variant, colours, age, saddle, chest and
+  shorn wool come from the carried data, but armour and held items are not shown. Its size comes from the mob your
+  client saw picked up, or from another mob of that kind it has seen; a kind it has never seen (for example right
+  after rejoining) is sized as one block and may sit slightly off.
 - The arm pose is sent by the server, so the client setting `renderArms = false` has no effect.
 - Players without the client mod may briefly see the hotbar slot change or the block-breaking crack while carrying.
 

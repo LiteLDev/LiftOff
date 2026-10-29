@@ -98,10 +98,12 @@ Invoke-SelfTest 'firstperson.rejoin_hold' -TimeoutSeconds 60 | Out-Null
 Press-Key ESC; Start-Sleep -Milliseconds 1500
 Save-Screenshot 'pause' | Out-Null
 Click 0.293 0.667 -Relative                     # Save & Quit
-Start-Sleep -Seconds 12                          # back at the title screen
+Start-Sleep -Seconds 12                          # back at the world list
 Save-Screenshot 'left-world' | Out-Null
 $rejoinMark = Get-LogMark
-Enter-TestWorld
+Focus-Game
+Click 0.173 0.43 -Relative                       # the first world: the one just left (LastPlayed = now)
+Wait-LogLine 'Player Spawned: ' 120 -Since $rejoinMark | Out-Null
 Wait-LogLine 'net: the server runs LiftOff' 120 -Since $rejoinMark | Out-Null
 Start-Sleep -Seconds 3
 Invoke-HeldSelfTest 'firstperson.rejoin_check' {
