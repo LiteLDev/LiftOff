@@ -20,6 +20,16 @@ Pick up chests, blocks and mobs and carry them in your arms. LiftOff brings Tsch
 Servers can choose what may be carried (black/whitelists, scripts, custom pickup conditions); see
 [docs/SPEC.md](docs/SPEC.md) for the complete behaviour.
 
+Players without the client mod can still pick up and put down everything. They see the arm pose and a stand-in
+of the carried block or mob (a carried chest shows no block), but no first-person view of the load.
+
+### Differences from Carry On
+
+- In first person a carried mob stays upright when you look up or down, can be hidden by a wall closer than about
+  2.5 blocks, and is not drawn if your client never saw the pickup (for example after rejoining while carrying).
+- The arm pose is sent by the server, so the client setting `renderArms = false` has no effect.
+- Players without the client mod may briefly see the hotbar slot change or the block-breaking crack while carrying.
+
 ## Install
 
 You need Minecraft Bedrock Edition **1.26.51** for Windows (x64) with LeviLamina **26.51.x** (on a client, installed through [LeviLauncher](https://github.com/LiteLDev/LeviLauncher)).
