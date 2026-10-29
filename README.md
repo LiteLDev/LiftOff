@@ -5,9 +5,6 @@
 
 Pick up chests, blocks and mobs and carry them in your arms. LiftOff brings Tschipp's Java mod [Carry On](https://modrinth.com/mod/carry-on) to Bedrock, for dedicated servers and single-player worlds.
 
-> [!NOTE]
-> LiftOff is in early development. There is no release yet.
-
 ## How to play
 
 - **Pick up**: with both hands empty, hold the Carry key (default Left Shift; on a vanilla client: sneak) and use
