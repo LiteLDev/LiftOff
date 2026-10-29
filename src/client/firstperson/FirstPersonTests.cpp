@@ -12,11 +12,15 @@
 #include "ll/api/service/Bedrock.h"
 
 #include "mc/deps/core/math/Vec3.h"
+#include "mc/deps/nbt/ByteTag.h"
+#include "mc/deps/nbt/CompoundTag.h"
+#include "mc/deps/shared_types/legacy/actor/ArmorSlot.h"
 #include "mc/world/Container.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorDefinitionIdentifier.h"
 #include "mc/world/actor/Mob.h"
 #include "mc/world/actor/player/Player.h"
+#include "mc/world/item/ItemStack.h"
 #include "mc/world/level/BlockPos.h"
 #include "mc/world/level/BlockSource.h"
 #include "mc/world/level/Level.h"
@@ -206,6 +210,247 @@ LO_REGISTER_SELFTEST("firstperson.pig", [](Context& ctx) -> ll::coro::CoroTask<>
     auto snbt = carry::captureActor(*pig);
     carry::removeCapturedActor(*pig);
     co_await showCarry(ctx, CarryData{.type = CarryType::Entity, .entity = snbt}, Kind::Entity, "minecraft:pig");
+});
+
+// Armour and held items of the carried entity: an armour stand with an iron helmet and a diamond sword.
+LO_REGISTER_SELFTEST("firstperson.equipment", [](Context& ctx) -> ll::coro::CoroTask<> {
+    if (!localPlayer()) {
+        ctx.info("no local player: skipped");
+        co_return;
+    }
+    auto pos = ctx.testPos(1060);
+    ctx.require(co_await ctx.ensureLoaded(pos), "test area loaded");
+    auto  level  = ll::service::getLevel();
+    auto& region = ctx.player().getDimensionBlockSource();
+    auto* stand  = level->getSpawner().spawnMob(
+        region,
+        ActorDefinitionIdentifier("minecraft:horse"),
+        nullptr,
+        lo::game::blockPos(pos).bottomCenter(),
+        false,
+        false,
+        false
+    );
+    ctx.require(stand != nullptr, "a horse spawned");
+    stand->setArmor(SharedTypes::Legacy::ArmorSlot::Body, lo::game::makeItem("minecraft:diamond_horse_armor"));
+    auto snbt = carry::captureActor(*stand); // at once: a peaceful world removes it on its next tick
+    ctx.check(snbt.find("diamond_horse_armor") != std::string::npos, "the horse armour is in the NBT");
+    carry::removeCapturedActor(*stand);
+    co_await showCarry(ctx, CarryData{.type = CarryType::Entity, .entity = snbt}, Kind::Entity, "minecraft:horse");
+});
+
+// A held item of the carried entity: a fox with an emerald in its mouth (main hand).
+LO_REGISTER_SELFTEST("firstperson.held_item", [](Context& ctx) -> ll::coro::CoroTask<> {
+    if (!localPlayer()) {
+        ctx.info("no local player: skipped");
+        co_return;
+    }
+    auto pos = ctx.testPos(1070);
+    ctx.require(co_await ctx.ensureLoaded(pos), "test area loaded");
+    auto  level  = ll::service::getLevel();
+    auto& region = ctx.player().getDimensionBlockSource();
+    auto* fox    = level->getSpawner().spawnMob(
+        region,
+        ActorDefinitionIdentifier("minecraft:fox"),
+        nullptr,
+        lo::game::blockPos(pos).bottomCenter(),
+        false,
+        false,
+        false
+    );
+    ctx.require(fox != nullptr, "a fox spawned");
+    fox->setCarriedItem(lo::game::makeItem("minecraft:emerald"));
+    auto snbt = carry::captureActor(*fox);
+    ctx.check(snbt.find("minecraft:emerald") != std::string::npos, "the emerald is in the NBT");
+    carry::removeCapturedActor(*fox);
+    co_await showCarry(ctx, CarryData{.type = CarryType::Entity, .entity = snbt}, Kind::Entity, "minecraft:fox");
+});
+
+// An armour stand (blacklisted by default, but a server may allow it): its display actor would crash the
+// actor renderer, so nothing is drawn, the hand stays hidden and the game keeps running.
+LO_REGISTER_SELFTEST("firstperson.armor_stand", [](Context& ctx) -> ll::coro::CoroTask<> {
+    auto* p = localPlayer();
+    if (!p) {
+        ctx.info("no local player: skipped");
+        co_return;
+    }
+    auto pos = ctx.testPos(1080);
+    ctx.require(co_await ctx.ensureLoaded(pos), "test area loaded");
+    auto  level  = ll::service::getLevel();
+    auto& region = ctx.player().getDimensionBlockSource();
+    auto* stand  = level->getSpawner().spawnMob(
+        region,
+        ActorDefinitionIdentifier("minecraft:armor_stand"),
+        nullptr,
+        lo::game::blockPos(pos).bottomCenter(),
+        false,
+        false,
+        false
+    );
+    ctx.require(stand != nullptr, "an armour stand spawned");
+    auto snbt = carry::captureActor(*stand);
+    carry::removeCapturedActor(*stand);
+    auto uid = p->getOrCreateUniqueID();
+    carry::set(*p, CarryData{.type = CarryType::Entity, .entity = snbt});
+    for (int i = 0; i < 40; ++i) co_await ctx.ticks(1);
+    auto st = fp::status();
+    ctx.check(st.kind == Kind::Entity && st.what == "minecraft:armor_stand", "the carry reached the renderer");
+    ctx.check(!st.actorAlive, "no stand-in for an armour stand");
+    if (auto* again = level->getPlayer(uid)) carry::clear(*again);
+    co_await ctx.ticks(5);
+});
+// Drawn over a wall right in front of the player (Java draws the hand layer after the world).
+LO_REGISTER_SELFTEST("firstperson.pig_at_wall", [](Context& ctx) -> ll::coro::CoroTask<> {
+    auto* p = localPlayer();
+    if (!p) {
+        ctx.info("no local player: skipped");
+        co_return;
+    }
+    auto  feet = p->getFeetBlockPos();
+    float yaw  = glm::radians(p->getRotation().y);
+    int   dx = static_cast<int>(std::round(-std::sin(yaw))), dz = static_cast<int>(std::round(std::cos(yaw)));
+    int   dim = static_cast<int>(p->getDimensionId());
+    for (int dy : {0, 1}) {
+        ctx.require(
+            ctx.setBlock(lo::core::GlobalPos{dim, feet.x + dx, feet.y + dy, feet.z + dz}, "minecraft:stone"),
+            "wall placed"
+        );
+    }
+    auto pos = ctx.testPos(1050);
+    ctx.require(co_await ctx.ensureLoaded(pos), "test area loaded");
+    auto  level  = ll::service::getLevel();
+    auto& region = ctx.player().getDimensionBlockSource();
+    auto* pig    = level->getSpawner().spawnMob(
+        region,
+        ActorDefinitionIdentifier("minecraft:pig"),
+        nullptr,
+        lo::game::blockPos(pos).bottomCenter(),
+        false,
+        false,
+        false
+    );
+    ctx.require(pig != nullptr, "a pig spawned");
+    co_await ctx.ticks(2);
+    auto snbt = carry::captureActor(*pig);
+    carry::removeCapturedActor(*pig);
+    co_await showCarry(ctx, CarryData{.type = CarryType::Entity, .entity = snbt}, Kind::Entity, "minecraft:pig");
+});
+
+// Rejoining while carrying (e2e scenario only: the real player has the tag `lo_fp_rejoin`; without it
+// both tests do nothing, so a full selftest run never leaves a carry behind). `rejoin_hold` gives the
+// player a pig and keeps it; the scenario leaves the world and joins it again; `rejoin_check` waits
+// until the pig is drawn in first person, holds it for a screenshot and clears it.
+constexpr char const* kRejoinTag = "lo_fp_rejoin";
+
+LO_REGISTER_SELFTEST("firstperson.rejoin_hold", [](Context& ctx) -> ll::coro::CoroTask<> {
+    auto* p = localPlayer();
+    if (!p || !p->hasTag(kRejoinTag)) {
+        ctx.info("not in the rejoin scenario: skipped");
+        co_return;
+    }
+    ctx.require(!carry::isCarrying(*p), "the local player carries nothing");
+    auto pos = ctx.testPos(1040);
+    ctx.require(co_await ctx.ensureLoaded(pos), "test area loaded");
+    auto  level  = ll::service::getLevel();
+    auto& region = ctx.player().getDimensionBlockSource();
+    auto* pig    = level->getSpawner().spawnMob(
+        region,
+        ActorDefinitionIdentifier("minecraft:pig"),
+        nullptr,
+        lo::game::blockPos(pos).bottomCenter(),
+        false,
+        false,
+        false
+    );
+    ctx.require(pig != nullptr, "a pig spawned");
+    co_await ctx.ticks(2);
+    auto snbt = carry::captureActor(*pig);
+    carry::removeCapturedActor(*pig);
+    auto uid = p->getOrCreateUniqueID();
+    carry::set(*p, CarryData{.type = CarryType::Entity, .entity = snbt});
+    bool drawn = false;
+    for (int i = 0; i < 200 && !drawn; ++i) {
+        co_await ctx.ticks(1);
+        auto st = fp::status();
+        drawn   = st.kind == Kind::Entity && st.frames > 2 && st.actorAlive;
+    }
+    ctx.check(drawn, "drawn before leaving");
+    auto* again = level->getPlayer(uid);
+    ctx.check(again && carry::isCarrying(*again), "still carrying (kept for the rejoin)");
+    ctx.info("carrier " + p->getUuid().asString());
+});
+
+LO_REGISTER_SELFTEST("firstperson.rejoin_check", [](Context& ctx) -> ll::coro::CoroTask<> {
+    auto* p = localPlayer();
+    if (!p) {
+        ctx.info("no local player: skipped");
+        co_return;
+    }
+    ctx.info(
+        "player " + p->getUuid().asString() + (p->hasTag(kRejoinTag) ? " (tagged)" : " (not tagged)")
+        + (carry::isCarrying(*p) ? ", carrying" : ", not carrying")
+    );
+    if (!p->hasTag(kRejoinTag) && !carry::isCarrying(*p)) {
+        ctx.info("not in the rejoin scenario: skipped");
+        co_return;
+    }
+    auto uid = p->getOrCreateUniqueID();
+    ctx.require(carry::isCarrying(*p), "the carry survived leaving the world");
+    bool drawn = false;
+    for (int i = 0; i < 200 && !drawn; ++i) {
+        co_await ctx.ticks(1);
+        auto st = fp::status();
+        drawn   = st.kind == Kind::Entity && st.what == "minecraft:pig" && st.frames > 2 && st.actorAlive;
+    }
+    ctx.check(drawn, "the pig is drawn in first person after rejoining");
+    ctx.info("holding minecraft:pig");
+    co_await ctx.ticks(kHoldTicks);
+    auto level = ll::service::getLevel();
+    if (auto* again = level ? level->getPlayer(uid) : nullptr) {
+        carry::clear(*again);
+        again->removeTag(kRejoinTag);
+    }
+    bool released = false;
+    for (int i = 0; i < 100 && !released; ++i) {
+        co_await ctx.ticks(1);
+        auto now = fp::status();
+        released = now.kind == Kind::None && !now.actorAlive;
+    }
+    ctx.check(released, "the renderer released the carry");
+});
+
+// A carried entity the client never saw (rejoined while carrying, or picked up out of its sight): a
+// sheep spawned 400 blocks away, outside the client's view, with an orange fleece.
+LO_REGISTER_SELFTEST("firstperson.unseen_sheep", [](Context& ctx) -> ll::coro::CoroTask<> {
+    if (!localPlayer()) {
+        ctx.info("no local player: skipped");
+        co_return;
+    }
+    auto pos = ctx.testPos(1030, 400);
+    ctx.require(co_await ctx.ensureLoaded(pos), "test area loaded");
+    auto  level  = ll::service::getLevel();
+    auto& region = ctx.player().getDimensionBlockSource();
+    auto* sheep  = level->getSpawner().spawnMob(
+        region,
+        ActorDefinitionIdentifier("minecraft:sheep"),
+        nullptr,
+        lo::game::blockPos(pos).bottomCenter(),
+        false,
+        false,
+        false
+    );
+    ctx.require(sheep != nullptr, "a sheep spawned");
+    co_await ctx.ticks(2);
+    auto tag = carry::parseNbt(carry::captureActor(*sheep));
+    carry::removeCapturedActor(*sheep);
+    ctx.require(tag.has_value(), "sheep NBT");
+    (*tag)["Color"] = static_cast<schar>(1); // orange
+    co_await showCarry(
+        ctx,
+        CarryData{.type = CarryType::Entity, .entity = carry::toSnbt(*tag)},
+        Kind::Entity,
+        "minecraft:sheep"
+    );
 });
 
 #endif // LO_CLIENT

@@ -8,8 +8,8 @@
 //   block:  scale 2.5; translate (0, -0.5, -1); facePlayer != isChest ? rotate 180 Y, -8 X : +8 X;
 //           script transform; drawn as the item of the block's default state (centred on the origin)
 //   entity: rotate 180 Y; scale 0.8; translate (0, -h - 0.2, w * 1.3 + 0.1); script transform;
-//           rotate 90 Y if rotateEntitiesSideways; the entity is the client's own copy of the picked-up
-//           mob, kept in the level and drawn by its entity pass with this transform (FirstPerson.cpp)
+//           rotate 90 Y if rotateEntitiesSideways; drawn as a client-only stand-in built from the synced
+//           NBT, in the same hand pass as blocks (after the world, pitch included; see FirstPerson.cpp)
 // The visual comes from `carry::visualFor(data)` (U12 model overrides / script render). Carried
 // players keep the vanilla hand (Carry On draws nothing for them in first person).
 

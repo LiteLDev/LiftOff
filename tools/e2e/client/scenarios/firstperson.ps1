@@ -70,13 +70,62 @@ Invoke-HeldSelfTest 'firstperson.furnace' {
 Invoke-HeldSelfTest 'firstperson.pig' {
     Start-Sleep -Milliseconds 300
     $script:pigShot = Save-Screenshot 'pig'
+    # Looking down: Carry On's entity turns with the camera (it is drawn in view space).
+    [BsE2E.Native]::MoveRelative(0, 300); Start-Sleep -Milliseconds 400
+    Save-Screenshot 'pig-looking-down' | Out-Null
+    [BsE2E.Native]::MoveRelative(0, -300); Start-Sleep -Milliseconds 300
     Press-Key F5; Start-Sleep -Milliseconds 500
     Save-Screenshot 'pig-third-back' | Out-Null
     Press-Key F5; Start-Sleep -Milliseconds 300
     Press-Key F5; Start-Sleep -Milliseconds 300
 } | Out-Null
 
+Invoke-HeldSelfTest 'firstperson.unseen_sheep' {
+    Start-Sleep -Milliseconds 300
+    $script:sheepShot = Save-Screenshot 'unseen-sheep'
+} | Out-Null
+
+Invoke-HeldSelfTest 'firstperson.equipment' {
+    Start-Sleep -Milliseconds 300
+    $script:equipShot = Save-Screenshot 'horse-armour'
+} | Out-Null
+
+Invoke-HeldSelfTest 'firstperson.held_item' {
+    Start-Sleep -Milliseconds 300
+    $script:foxShot = Save-Screenshot 'fox-held-item'
+} | Out-Null
+
+Invoke-SelfTest 'firstperson.armor_stand' -TimeoutSeconds 60 | Out-Null
+
+Invoke-HeldSelfTest 'firstperson.pig_at_wall' {
+    Start-Sleep -Milliseconds 300
+    $script:wallShot = Save-Screenshot 'pig-at-wall'
+} | Out-Null
+
 Save-Screenshot 'after' | Out-Null
+
+# Rejoining while carrying: the client never sees the pickup of the pig it carries after joining again.
+Invoke-Chat '/tag @s add lo_fp_rejoin'
+Invoke-SelfTest 'firstperson.rejoin_hold' -TimeoutSeconds 60 | Out-Null
+Press-Key ESC; Start-Sleep -Milliseconds 1500
+Save-Screenshot 'pause' | Out-Null
+Click 0.293 0.667 -Relative                     # Save & Quit
+Start-Sleep -Seconds 12                          # back at the world list
+Save-Screenshot 'left-world' | Out-Null
+$rejoinMark = Get-LogMark
+Focus-Game
+Click 0.173 0.43 -Relative                       # the first world: the one just left (LastPlayed = now)
+Wait-LogLine 'Player Spawned: ' 120 -Since $rejoinMark | Out-Null
+Wait-LogLine 'net: the server runs LiftOff' 120 -Since $rejoinMark | Out-Null
+Start-Sleep -Seconds 3
+Invoke-HeldSelfTest 'firstperson.rejoin_check' {
+    Start-Sleep -Milliseconds 300
+    $script:rejoinShot = Save-Screenshot 'pig-after-rejoin'
+} | Out-Null
+Assert-Drawn 'the pig carried across a rejoin' $empty $script:rejoinShot
+Assert-Drawn 'the carried unseen sheep' $empty $script:sheepShot
+Assert-Drawn 'the carried horse in armour' $empty $script:equipShot
+Assert-Drawn 'the carried fox' $empty $script:foxShot
 Assert-Drawn 'the carried chest' $empty $script:chestShot
 Assert-Drawn 'the carried pig' $empty $script:pigShot
 foreach ($line in 'firstperson: drawing block minecraft:chest', 'firstperson: drawing entity minecraft:pig') {
