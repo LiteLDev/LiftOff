@@ -374,7 +374,9 @@ void applyEquipment(Actor& actor, CompoundTag const& tag) {
         }
     }
     if (auto hand = items("Mainhand"); !hand.empty() && !hand[0].isNull()) {
-        log().info("firstperson: (experiment) not equipping hand {}", hand[0].getTypeName());
+        log().info("firstperson: equip hand {}", hand[0].getTypeName());
+        actor.setCarriedItem(hand[0]);
+        log().info("firstperson: equip hand done");
     }
     if (auto off = items("Offhand"); !off.empty() && !off[0].isNull()) actor.setOffhandSlot(off[0]);
 }

@@ -87,7 +87,12 @@ Invoke-HeldSelfTest 'firstperson.unseen_sheep' {
 
 Invoke-HeldSelfTest 'firstperson.equipment' {
     Start-Sleep -Milliseconds 300
-    $script:equipShot = Save-Screenshot 'armor-stand-equipment'
+    $script:equipShot = Save-Screenshot 'horse-armour'
+} | Out-Null
+
+Invoke-HeldSelfTest 'firstperson.held_item' {
+    Start-Sleep -Milliseconds 300
+    $script:foxShot = Save-Screenshot 'fox-held-item'
 } | Out-Null
 
 Invoke-HeldSelfTest 'firstperson.pig_at_wall' {
@@ -117,7 +122,8 @@ Invoke-HeldSelfTest 'firstperson.rejoin_check' {
 } | Out-Null
 Assert-Drawn 'the pig carried across a rejoin' $empty $script:rejoinShot
 Assert-Drawn 'the carried unseen sheep' $empty $script:sheepShot
-Assert-Drawn 'the carried armour stand' $empty $script:equipShot
+Assert-Drawn 'the carried horse in armour' $empty $script:equipShot
+Assert-Drawn 'the carried fox' $empty $script:foxShot
 Assert-Drawn 'the carried chest' $empty $script:chestShot
 Assert-Drawn 'the carried pig' $empty $script:pigShot
 foreach ($line in 'firstperson: drawing block minecraft:chest', 'firstperson: drawing entity minecraft:pig') {

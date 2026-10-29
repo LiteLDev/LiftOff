@@ -245,6 +245,33 @@ LO_REGISTER_SELFTEST("firstperson.equipment", [](Context& ctx) -> ll::coro::Coro
     );
 });
 
+// A held item of the carried entity: a fox with an emerald in its mouth (main hand).
+LO_REGISTER_SELFTEST("firstperson.held_item", [](Context& ctx) -> ll::coro::CoroTask<> {
+    if (!localPlayer()) {
+        ctx.info("no local player: skipped");
+        co_return;
+    }
+    auto pos = ctx.testPos(1070);
+    ctx.require(co_await ctx.ensureLoaded(pos), "test area loaded");
+    auto  level  = ll::service::getLevel();
+    auto& region = ctx.player().getDimensionBlockSource();
+    auto* fox    = level->getSpawner().spawnMob(
+        region,
+        ActorDefinitionIdentifier("minecraft:fox"),
+        nullptr,
+        lo::game::blockPos(pos).bottomCenter(),
+        false,
+        false,
+        false
+    );
+    ctx.require(fox != nullptr, "a fox spawned");
+    fox->setCarriedItem(lo::game::makeItem("minecraft:emerald"));
+    auto snbt = carry::captureActor(*fox);
+    ctx.check(snbt.find("minecraft:emerald") != std::string::npos, "the emerald is in the NBT");
+    carry::removeCapturedActor(*fox);
+    co_await showCarry(ctx, CarryData{.type = CarryType::Entity, .entity = snbt}, Kind::Entity, "minecraft:fox");
+});
+
 // Drawn over a wall right in front of the player (Java draws the hand layer after the world).
 LO_REGISTER_SELFTEST("firstperson.pig_at_wall", [](Context& ctx) -> ll::coro::CoroTask<> {
     auto* p = localPlayer();
