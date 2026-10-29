@@ -288,11 +288,18 @@ LO_REGISTER_SELFTEST("firstperson.rejoin_hold", [](Context& ctx) -> ll::coro::Co
     ctx.check(drawn, "drawn before leaving");
     auto* again = level->getPlayer(uid);
     ctx.check(again && carry::isCarrying(*again), "still carrying (kept for the rejoin)");
+    ctx.info("carrier " + p->getUuid().asString());
 });
 
 LO_REGISTER_SELFTEST("firstperson.rejoin_check", [](Context& ctx) -> ll::coro::CoroTask<> {
     auto* p = localPlayer();
-    if (!p || !p->hasTag(kRejoinTag)) {
+    if (!p) {
+        ctx.info("no local player: skipped");
+        co_return;
+    }
+    ctx.info("player " + p->getUuid().asString() + (p->hasTag(kRejoinTag) ? " (tagged)" : " (not tagged)")
+             + (carry::isCarrying(*p) ? ", carrying" : ", not carrying"));
+    if (!p->hasTag(kRejoinTag) && !carry::isCarrying(*p)) {
         ctx.info("not in the rejoin scenario: skipped");
         co_return;
     }
