@@ -14,6 +14,7 @@ Send-Cmd 'kill @e[type=pig]'
 # Player at (0.5, -60, 0.5) looking at a frozen pig 1.5 blocks south (reach 2.5).
 Send-Cmd 'summon pig 0.5 -60 2.0'
 Send-Cmd 'effect @e[type=pig] slowness 600 255 true'
+Send-Cmd 'tp @e[type=pig] 0.5 -60 2.0'           # it may have walked off before the Slowness
 Send-Cmd 'tp @a 0.5 -60 0.5 0 45'   # yaw 0 = south, pitch 45 down: the crosshair is on the pig
 Start-Sleep -Seconds 2
 Save-Screenshot 'before' | Out-Null

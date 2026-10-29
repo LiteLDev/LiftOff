@@ -60,12 +60,20 @@ ll::coro::CoroTask<BlockPos> arena(Context& ctx, int dx) {
     co_return feet;
 }
 
-/// Spawns `id` one block east of `feet` (inside the reach of 2.5 blocks).
+/// Spawns `id` one block east of `feet` (inside the reach of 2.5 blocks). Spawned mobs are sometimes
+/// babies: keep an adult unless the id asks for a baby (`<minecraft:entity_born>`).
 Actor* spawnNear(Context& ctx, BlockPos const& feet, std::string const& id, int east = 1) {
-    auto  level = ll::service::getLevel();
-    auto& reg   = ctx.player().getDimensionBlockSource();
-    Vec3  at    = BlockPos{feet.x + east, feet.y, feet.z}.bottomCenter();
-    Actor* a    = level->getSpawner().spawnMob(reg, ActorDefinitionIdentifier(id), nullptr, at, false, false, false);
+    auto   level = ll::service::getLevel();
+    auto&  reg   = ctx.player().getDimensionBlockSource();
+    Vec3   at    = BlockPos{feet.x + east, feet.y, feet.z}.bottomCenter();
+    bool   baby  = id.find("entity_born") != std::string::npos;
+    Actor* a     = nullptr;
+    for (int i = 0; i < 10; ++i) {
+        a = level->getSpawner().spawnMob(reg, ActorDefinitionIdentifier(id), nullptr, at, false, false, false);
+        if (!a || baby || !a->isBaby()) break;
+        a->remove();
+        a = nullptr;
+    }
     ctx.require(a != nullptr, "spawned " + id);
     a->setPersistent();
     return a;
