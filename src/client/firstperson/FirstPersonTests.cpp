@@ -210,6 +210,43 @@ LO_REGISTER_SELFTEST("firstperson.pig", [](Context& ctx) -> ll::coro::CoroTask<>
     co_await showCarry(ctx, CarryData{.type = CarryType::Entity, .entity = snbt}, Kind::Entity, "minecraft:pig");
 });
 
+// Drawn over a wall right in front of the player (Java draws the hand layer after the world).
+LO_REGISTER_SELFTEST("firstperson.pig_at_wall", [](Context& ctx) -> ll::coro::CoroTask<> {
+    auto* p = localPlayer();
+    if (!p) {
+        ctx.info("no local player: skipped");
+        co_return;
+    }
+    auto  feet = p->getFeetBlockPos();
+    float yaw  = glm::radians(p->getRotation().y);
+    int   dx   = static_cast<int>(std::round(-std::sin(yaw))), dz = static_cast<int>(std::round(std::cos(yaw)));
+    int   dim  = static_cast<int>(p->getDimensionId());
+    for (int dy : {0, 1}) {
+        ctx.require(
+            ctx.setBlock(lo::core::GlobalPos{dim, feet.x + dx, feet.y + dy, feet.z + dz}, "minecraft:stone"),
+            "wall placed"
+        );
+    }
+    auto pos = ctx.testPos(1050);
+    ctx.require(co_await ctx.ensureLoaded(pos), "test area loaded");
+    auto  level  = ll::service::getLevel();
+    auto& region = ctx.player().getDimensionBlockSource();
+    auto* pig    = level->getSpawner().spawnMob(
+        region,
+        ActorDefinitionIdentifier("minecraft:pig"),
+        nullptr,
+        lo::game::blockPos(pos).bottomCenter(),
+        false,
+        false,
+        false
+    );
+    ctx.require(pig != nullptr, "a pig spawned");
+    co_await ctx.ticks(2);
+    auto snbt = carry::captureActor(*pig);
+    carry::removeCapturedActor(*pig);
+    co_await showCarry(ctx, CarryData{.type = CarryType::Entity, .entity = snbt}, Kind::Entity, "minecraft:pig");
+});
+
 // Rejoining while carrying (e2e scenario only: the real player has the tag `lo_fp_rejoin`; without it
 // both tests do nothing, so a full selftest run never leaves a carry behind). `rejoin_hold` gives the
 // player a pig and keeps it; the scenario leaves the world and joins it again; `rejoin_check` waits

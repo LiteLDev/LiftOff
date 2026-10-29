@@ -16,6 +16,7 @@
 #include "ll/api/event/EventBus.h"
 #include "ll/api/event/ListenerBase.h"
 #include "ll/api/event/client/ClientExitLevelEvent.h"
+#include "ll/api/event/world/ClientLevelTickEvent.h"
 #include "ll/api/memory/Hook.h"
 
 #include "mc/deps/ecs/gamerefs_entity/GameRefsEntity.h"
@@ -45,6 +46,7 @@
 #include "mc/legacy/ActorUniqueID.h"
 #include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/RemoveActorPacketPayload.h"
+#include "mc/util/VariantParameterList.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorCategory.h"
 #include "mc/world/actor/ActorDataIDs.h"
@@ -52,7 +54,6 @@
 #include "mc/world/actor/ActorFactory.h"
 #include "mc/world/actor/ActorFlags.h"
 #include "mc/world/actor/ActorInitializationMethod.h"
-#include "mc/util/VariantParameterList.h"
 #include "mc/world/actor/DataItem2.h"
 #include "mc/world/actor/Mob.h"
 #include "mc/world/actor/SynchedActorDataEntityWrapper.h"
@@ -235,6 +236,20 @@ void recordSize(Actor& actor) {
     if (!actor.isBaby()) typeSizes()[actor.getTypeName()] = s;
 }
 
+/// Learns the size of every type of entity around (client thread, once a second): a carried entity the
+/// client never saw (rejoined while carrying) still gets the right size if one of its type was around.
+void learnTypeSizes(Level& level) {
+    static int tick = 0;
+    if (++tick % 20 != 0) return;
+    for (Actor* actor : level.getRuntimeActorList()) {
+        if (!actor || actor->isPlayer() || actor->isBaby() || !actor->hasCategory(ActorCategory::Mob)) continue;
+        Size s{carry::entityHeight(*actor), carry::entityWidth(*actor)};
+        if (s.height <= 0.f || s.width <= 0.f) continue;
+        std::lock_guard lock(gSizeMutex);
+        typeSizes()[actor->getTypeName()] = s;
+    }
+}
+
 /// The size of the carried entity (`tag`: its NBT) for Carry On's transform.
 Size carriedSize(CompoundTag const& tag, std::string const& id, Actor const& standIn) {
     {
@@ -260,17 +275,12 @@ Size carriedSize(CompoundTag const& tag, std::string const& id, Actor const& sta
             return other->isBaby() == baby ? s : (baby ? half(s) : Size{s.height * 2.f, s.width * 2.f});
         }
     }
-    // The stand-in's own box, from its definition's components (a display actor is not initialised
-    // from them: the defaults are 0.6 x 1.8).
-    auto& self = const_cast<Actor&>(standIn);
-    try {
-        VariantParameterList params{};
-        params.mSelf = &self;
-        self.initializeComponents(ActorInitializationMethod::Spawned, params);
-    } catch (...) {}
+    // The stand-in's own box, unless it is the 0.6 x 1.8 default of an actor not initialised from its
+    // definition (display actors); then a one-block box.
     Size own{carry::entityHeight(standIn), carry::entityWidth(standIn)};
-    if (own.height > 0.f && own.width > 0.f) return own;
-    return Size{1.f, 1.f};
+    bool uninitialised = std::abs(own.width - 0.6f) < 1e-3f && std::abs(own.height - 1.8f) < 1e-3f;
+    if (own.height > 0.f && own.width > 0.f && !uninitialised) return own;
+    return half(Size{1.f, 1.f});
 }
 
 // ---- stand-in ------------------------------------------------------------------------------------
@@ -607,6 +617,15 @@ public:
         FirstPersonRenderHook::hook();
         FirstPersonGlobalAnimsHook::hook();
         FirstPersonRemoveActorHook::hook();
+        mTick = ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientLevelTickEvent>(
+            [](ll::event::ClientLevelTickEvent& ev) {
+                try {
+                    learnTypeSizes(ev.level());
+                } catch (std::exception const& e) {
+                    log().error("firstperson: learning entity sizes failed: {}", e.what());
+                }
+            }
+        );
         mExit = ll::event::EventBus::getInstance().emplaceListener<ll::event::ClientExitLevelEvent>(
             [](ll::event::ClientExitLevelEvent&) {
                 std::lock_guard lock(gSizeMutex);
@@ -619,11 +638,14 @@ public:
         FirstPersonGlobalAnimsHook::unhook();
         FirstPersonRemoveActorHook::unhook();
         if (mExit) ll::event::EventBus::getInstance().removeListener(mExit);
+        if (mTick) ll::event::EventBus::getInstance().removeListener(mTick);
         mExit.reset();
+        mTick.reset();
     }
 
 private:
     ll::event::ListenerPtr mExit;
+    ll::event::ListenerPtr mTick;
 };
 
 } // namespace lo::client::firstperson

@@ -85,6 +85,11 @@ Invoke-HeldSelfTest 'firstperson.unseen_sheep' {
     $script:sheepShot = Save-Screenshot 'unseen-sheep'
 } | Out-Null
 
+Invoke-HeldSelfTest 'firstperson.pig_at_wall' {
+    Start-Sleep -Milliseconds 300
+    $script:wallShot = Save-Screenshot 'pig-at-wall'
+} | Out-Null
+
 Save-Screenshot 'after' | Out-Null
 
 # Rejoining while carrying: the client never sees the pickup of the pig it carries after joining again.
