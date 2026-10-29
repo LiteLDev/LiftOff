@@ -46,8 +46,11 @@
 #include "mc/network/packet/RemoveActorPacketPayload.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorCategory.h"
+#include "mc/world/actor/ActorDataIDs.h"
 #include "mc/world/actor/BuiltInActorComponents.h"
+#include "mc/world/actor/DataItem2.h"
 #include "mc/world/actor/Mob.h"
+#include "mc/world/actor/SynchedActorDataEntityWrapper.h"
 #include "mc/world/actor/provider/ActorMovement.h"
 #include "mc/world/actor/provider/PlayerMovement.h"
 #include "mc/world/item/ItemStack.h"
@@ -400,6 +403,19 @@ void clientTick(Level& level) {
             Vec3  at  = player->getPosition() + Vec3{-std::sin(yaw) * 1.2f, -0.9f, std::cos(yaw) * 1.2f};
             actor->moveTo(at, Vec2{0.f, player->getRotation().y});
             if (!actor->getNameTag().empty()) actor->setNameTag("");
+            // The drawn size comes from the synched scale (the same path as SetActorDataPacket).
+            float target = 0.f;
+            {
+                std::lock_guard lock(sh.mutex);
+                if (sh.baseScale > 0.f) target = sh.baseScale * sh.scale * kDepthFactor;
+            }
+            auto& data = actor->mEntityData;
+            if (target > 0.f
+                && std::abs(data->getFloat(static_cast<ushort>(ActorDataIDs::Reserved038)) - target) > 1e-3f) {
+                std::vector<std::unique_ptr<DataItem>> items;
+                items.push_back(DataItem::create(static_cast<DataItem::ID>(ActorDataIDs::Reserved038), float{target}));
+                data->assignValues(items, *actor, std::nullopt);
+            }
         }
     }
 }
@@ -466,7 +482,10 @@ bool placeCarried(Actor& actor) {
     auto&           sh = shared();
     std::lock_guard lock(sh.mutex);
     if (!sh.firstPerson || client->getOptions().getPlayerViewPerspective() != 0) return false;
-    if (sh.baseScale <= 0.f) sh.baseScale = actor.mScale > 0.f ? static_cast<float>(actor.mScale) : 1.f;
+    if (sh.baseScale <= 0.f) {
+        float synched = actor.mEntityData->getFloat(static_cast<ushort>(ActorDataIDs::Reserved038)); // scale
+        sh.baseScale  = synched > 0.f ? synched : 1.f;
+    }
 
     auto offset = [&](Vec2 const& rot) {
         glm::mat4 cam = glm::rotate(glm::mat4{1.f}, glm::radians(180.f - rot.y), kY); // yaw 0 looks south (+Z)
