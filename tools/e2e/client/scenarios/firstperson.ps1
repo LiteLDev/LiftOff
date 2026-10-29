@@ -95,6 +95,11 @@ Invoke-HeldSelfTest 'firstperson.held_item' {
     $script:foxShot = Save-Screenshot 'fox-held-item'
 } | Out-Null
 
+Invoke-HeldSelfTest 'firstperson.armor_stand' {
+    Start-Sleep -Milliseconds 300
+    Save-Screenshot 'armor-stand' | Out-Null
+} | Out-Null
+
 Invoke-HeldSelfTest 'firstperson.pig_at_wall' {
     Start-Sleep -Milliseconds 300
     $script:wallShot = Save-Screenshot 'pig-at-wall'
