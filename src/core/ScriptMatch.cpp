@@ -270,8 +270,14 @@ private:
     std::size_t      mI = 0;
     int              mDepth = 0;
 
+    /// Whitespace and `/* ... */` comments (Bedrock's SNBT writes `"..." /*BASE64*/` after base64 strings).
     void skipWs() {
-        while (mI < mS.size() && std::isspace(static_cast<unsigned char>(mS[mI]))) ++mI;
+        for (;;) {
+            while (mI < mS.size() && std::isspace(static_cast<unsigned char>(mS[mI]))) ++mI;
+            if (mS.substr(mI, 2) != "/*") return;
+            auto end = mS.find("*/", mI + 2);
+            mI       = end == std::string_view::npos ? mS.size() : end + 2;
+        }
     }
     bool eat(char c) {
         skipWs();

@@ -137,6 +137,11 @@ TEST(ScriptMatch, Snbt) {
     EXPECT_TRUE(parseSnbt(R"({u:"\u00e9"})").has_value());
     EXPECT_EQ((*parseSnbt(R"({u:"\u00e9"})"))["u"], "\xC3\xA9");
     EXPECT_FALSE(parseSnbt("").has_value());
+    // Bedrock writes a comment after base64 strings (e.g. an entity's EntityStorageKey).
+    auto c = parseSnbt(R"({k:{StorageKey:"AAAAAQAAAN4=" /*BASE64*/},n:1})");
+    ASSERT_TRUE(c.has_value());
+    EXPECT_EQ((*c)["k"]["StorageKey"], "AAAAAQAAAN4=");
+    EXPECT_EQ((*c)["n"], 1);
     EXPECT_FALSE(parseSnbt("{a:1").has_value());
     EXPECT_FALSE(parseSnbt("{a:1}}").has_value());
     EXPECT_FALSE(parseSnbt("{a:\"x}").has_value());

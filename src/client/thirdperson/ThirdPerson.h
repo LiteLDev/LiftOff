@@ -3,7 +3,7 @@
 // U11: native third-person rendering of carried objects (docs/SPEC.md §4.3), client build only.
 //
 // Every player the client draws (other players, and the local player in the F5 views) that carries a
-// block or an entity according to the client mirror (`lo::client::carry::carriedOf`) gets its carry drawn
+// block or an entity according to the client mirror (`lo::client::carry::carriedCopy`) gets its carry drawn
 // after the player model: a block as its item, an entity as a client-only display actor built from the
 // carried NBT. The transform is Carry On's (CarryTransform.h) in the carrier's interpolated frame.
 //

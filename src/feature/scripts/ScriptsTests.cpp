@@ -6,6 +6,8 @@
 #include <utility>
 #include <vector>
 
+#include "fmt/format.h"
+
 #include "ll/api/service/Bedrock.h"
 
 #include "mc/deps/core/math/Vec3.h"
@@ -96,7 +98,13 @@ BlockSource& regionOf(Context& ctx) { return ctx.player().getDimensionBlockSourc
 Actor* spawnMob(Context& ctx, char const* id, lo::core::GlobalPos pos) {
     auto level = ll::service::getLevel();
     Vec3 at    = lo::game::blockPos(pos).bottomCenter();
-    return level->getSpawner().spawnMob(regionOf(ctx), ActorDefinitionIdentifier(id), nullptr, at, false, false, false);
+    for (int i = 0; i < 10; ++i) { // spawned mobs are sometimes babies (smaller): keep an adult
+        auto* mob =
+            level->getSpawner().spawnMob(regionOf(ctx), ActorDefinitionIdentifier(id), nullptr, at, false, false, false);
+        if (!mob || !mob->isBaby()) return mob;
+        mob->remove();
+    }
+    return nullptr;
 }
 
 json blockScript(json object, json rest = json::object()) {
@@ -181,7 +189,8 @@ LO_REGISTER_SELFTEST("scripts.object_entity", [](Context& ctx) -> ll::coro::Coro
         entityScript({{"name", "minecraft:p*"}, {"health", ">0"}, {"height", "<2"}, {"width", "<=1"}, {"nbt", {{"CustomName", "lo_script_pig"}}}}, {{"_id", "pig"}}),
     });
     ctx.require(env.count() == 6, "6 scripts parsed");
-    ctx.check(idOf(scripts::matchEntity(*pig)) == "pig", "name + health + size + partial NBT match the pig");
+    auto matched = idOf(scripts::matchEntity(*pig));
+    ctx.check(matched == "pig", fmt::format("name + health + size + partial NBT match the pig (matched {})", matched));
     pig->remove();
 });
 
