@@ -70,13 +70,28 @@ Invoke-HeldSelfTest 'firstperson.furnace' {
 Invoke-HeldSelfTest 'firstperson.pig' {
     Start-Sleep -Milliseconds 300
     $script:pigShot = Save-Screenshot 'pig'
+    # Looking down: Carry On's entity turns with the camera (it is drawn in view space).
+    [BsE2E.Native]::MoveRelative(0, 300); Start-Sleep -Milliseconds 400
+    Save-Screenshot 'pig-looking-down' | Out-Null
+    [BsE2E.Native]::MoveRelative(0, -300); Start-Sleep -Milliseconds 300
     Press-Key F5; Start-Sleep -Milliseconds 500
     Save-Screenshot 'pig-third-back' | Out-Null
     Press-Key F5; Start-Sleep -Milliseconds 300
     Press-Key F5; Start-Sleep -Milliseconds 300
 } | Out-Null
 
+Invoke-HeldSelfTest 'firstperson.unseen_sheep' {
+    Start-Sleep -Milliseconds 300
+    $script:sheepShot = Save-Screenshot 'unseen-sheep'
+} | Out-Null
+
+# TEMP calibration: the pause screen (for the rejoin case).
+Press-Key ESC; Start-Sleep -Milliseconds 1500
+Save-Screenshot 'pause' | Out-Null
+Press-Key ESC; Start-Sleep -Milliseconds 800
+
 Save-Screenshot 'after' | Out-Null
+Assert-Drawn 'the carried unseen sheep' $empty $script:sheepShot
 Assert-Drawn 'the carried chest' $empty $script:chestShot
 Assert-Drawn 'the carried pig' $empty $script:pigShot
 foreach ($line in 'firstperson: drawing block minecraft:chest', 'firstperson: drawing entity minecraft:pig') {

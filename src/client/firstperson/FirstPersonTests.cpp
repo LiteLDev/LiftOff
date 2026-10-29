@@ -12,6 +12,8 @@
 #include "ll/api/service/Bedrock.h"
 
 #include "mc/deps/core/math/Vec3.h"
+#include "mc/deps/nbt/ByteTag.h"
+#include "mc/deps/nbt/CompoundTag.h"
 #include "mc/world/Container.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorDefinitionIdentifier.h"
@@ -206,6 +208,40 @@ LO_REGISTER_SELFTEST("firstperson.pig", [](Context& ctx) -> ll::coro::CoroTask<>
     auto snbt = carry::captureActor(*pig);
     carry::removeCapturedActor(*pig);
     co_await showCarry(ctx, CarryData{.type = CarryType::Entity, .entity = snbt}, Kind::Entity, "minecraft:pig");
+});
+
+// A carried entity the client never saw (rejoined while carrying, or picked up out of its sight): a
+// sheep spawned 400 blocks away, outside the client's view, with an orange fleece.
+LO_REGISTER_SELFTEST("firstperson.unseen_sheep", [](Context& ctx) -> ll::coro::CoroTask<> {
+    if (!localPlayer()) {
+        ctx.info("no local player: skipped");
+        co_return;
+    }
+    auto pos = ctx.testPos(1030, 400);
+    ctx.require(co_await ctx.ensureLoaded(pos), "test area loaded");
+    auto  level  = ll::service::getLevel();
+    auto& region = ctx.player().getDimensionBlockSource();
+    auto* sheep  = level->getSpawner().spawnMob(
+        region,
+        ActorDefinitionIdentifier("minecraft:sheep"),
+        nullptr,
+        lo::game::blockPos(pos).bottomCenter(),
+        false,
+        false,
+        false
+    );
+    ctx.require(sheep != nullptr, "a sheep spawned");
+    co_await ctx.ticks(2);
+    auto tag = carry::parseNbt(carry::captureActor(*sheep));
+    carry::removeCapturedActor(*sheep);
+    ctx.require(tag.has_value(), "sheep NBT");
+    (*tag)["Color"] = static_cast<schar>(1); // orange
+    co_await showCarry(
+        ctx,
+        CarryData{.type = CarryType::Entity, .entity = carry::toSnbt(*tag)},
+        Kind::Entity,
+        "minecraft:sheep"
+    );
 });
 
 #endif // LO_CLIENT
