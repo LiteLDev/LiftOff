@@ -16,11 +16,11 @@
 #include "mc/deps/nbt/CompoundTag.h"
 #include "mc/deps/shared_types/legacy/actor/ArmorSlot.h"
 #include "mc/world/Container.h"
-#include "mc/world/item/ItemStack.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorDefinitionIdentifier.h"
 #include "mc/world/actor/Mob.h"
 #include "mc/world/actor/player/Player.h"
+#include "mc/world/item/ItemStack.h"
 #include "mc/world/level/BlockPos.h"
 #include "mc/world/level/BlockSource.h"
 #include "mc/world/level/Level.h"
@@ -235,14 +235,8 @@ LO_REGISTER_SELFTEST("firstperson.equipment", [](Context& ctx) -> ll::coro::Coro
     stand->setArmor(SharedTypes::Legacy::ArmorSlot::Body, lo::game::makeItem("minecraft:diamond_horse_armor"));
     auto snbt = carry::captureActor(*stand); // at once: a peaceful world removes it on its next tick
     ctx.check(snbt.find("diamond_horse_armor") != std::string::npos, "the horse armour is in the NBT");
-    ctx.info(snbt.substr(0, 4000));
     carry::removeCapturedActor(*stand);
-    co_await showCarry(
-        ctx,
-        CarryData{.type = CarryType::Entity, .entity = snbt},
-        Kind::Entity,
-        "minecraft:horse"
-    );
+    co_await showCarry(ctx, CarryData{.type = CarryType::Entity, .entity = snbt}, Kind::Entity, "minecraft:horse");
 });
 
 // A held item of the carried entity: a fox with an emerald in its mouth (main hand).
@@ -272,9 +266,11 @@ LO_REGISTER_SELFTEST("firstperson.held_item", [](Context& ctx) -> ll::coro::Coro
     co_await showCarry(ctx, CarryData{.type = CarryType::Entity, .entity = snbt}, Kind::Entity, "minecraft:fox");
 });
 
-// An armour stand (not a mob in Carry On's sense, but an entity it can carry).
+// An armour stand (blacklisted by default, but a server may allow it): its display actor would crash the
+// actor renderer, so nothing is drawn, the hand stays hidden and the game keeps running.
 LO_REGISTER_SELFTEST("firstperson.armor_stand", [](Context& ctx) -> ll::coro::CoroTask<> {
-    if (!localPlayer()) {
+    auto* p = localPlayer();
+    if (!p) {
         ctx.info("no local player: skipped");
         co_return;
     }
@@ -294,14 +290,15 @@ LO_REGISTER_SELFTEST("firstperson.armor_stand", [](Context& ctx) -> ll::coro::Co
     ctx.require(stand != nullptr, "an armour stand spawned");
     auto snbt = carry::captureActor(*stand);
     carry::removeCapturedActor(*stand);
-    co_await showCarry(
-        ctx,
-        CarryData{.type = CarryType::Entity, .entity = snbt},
-        Kind::Entity,
-        "minecraft:armor_stand"
-    );
+    auto uid = p->getOrCreateUniqueID();
+    carry::set(*p, CarryData{.type = CarryType::Entity, .entity = snbt});
+    for (int i = 0; i < 40; ++i) co_await ctx.ticks(1);
+    auto st = fp::status();
+    ctx.check(st.kind == Kind::Entity && st.what == "minecraft:armor_stand", "the carry reached the renderer");
+    ctx.check(!st.actorAlive, "no stand-in for an armour stand");
+    if (auto* again = level->getPlayer(uid)) carry::clear(*again);
+    co_await ctx.ticks(5);
 });
-
 // Drawn over a wall right in front of the player (Java draws the hand layer after the world).
 LO_REGISTER_SELFTEST("firstperson.pig_at_wall", [](Context& ctx) -> ll::coro::CoroTask<> {
     auto* p = localPlayer();
@@ -311,8 +308,8 @@ LO_REGISTER_SELFTEST("firstperson.pig_at_wall", [](Context& ctx) -> ll::coro::Co
     }
     auto  feet = p->getFeetBlockPos();
     float yaw  = glm::radians(p->getRotation().y);
-    int   dx   = static_cast<int>(std::round(-std::sin(yaw))), dz = static_cast<int>(std::round(std::cos(yaw)));
-    int   dim  = static_cast<int>(p->getDimensionId());
+    int   dx = static_cast<int>(std::round(-std::sin(yaw))), dz = static_cast<int>(std::round(std::cos(yaw)));
+    int   dim = static_cast<int>(p->getDimensionId());
     for (int dy : {0, 1}) {
         ctx.require(
             ctx.setBlock(lo::core::GlobalPos{dim, feet.x + dx, feet.y + dy, feet.z + dz}, "minecraft:stone"),
@@ -389,8 +386,10 @@ LO_REGISTER_SELFTEST("firstperson.rejoin_check", [](Context& ctx) -> ll::coro::C
         ctx.info("no local player: skipped");
         co_return;
     }
-    ctx.info("player " + p->getUuid().asString() + (p->hasTag(kRejoinTag) ? " (tagged)" : " (not tagged)")
-             + (carry::isCarrying(*p) ? ", carrying" : ", not carrying"));
+    ctx.info(
+        "player " + p->getUuid().asString() + (p->hasTag(kRejoinTag) ? " (tagged)" : " (not tagged)")
+        + (carry::isCarrying(*p) ? ", carrying" : ", not carrying")
+    );
     if (!p->hasTag(kRejoinTag) && !carry::isCarrying(*p)) {
         ctx.info("not in the rejoin scenario: skipped");
         co_return;

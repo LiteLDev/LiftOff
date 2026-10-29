@@ -40,10 +40,10 @@
 #include "mc/deps/nbt/Int64Tag.h"
 #include "mc/deps/nbt/IntTag.h"
 #include "mc/deps/nbt/ListTag.h"
-#include "mc/deps/shared_types/legacy/actor/ArmorSlot.h"
 #include "mc/deps/nbt/ShortTag.h"
 #include "mc/deps/renderer/Camera.h"
 #include "mc/deps/renderer/MatrixStack.h"
+#include "mc/deps/shared_types/legacy/actor/ArmorSlot.h"
 #include "mc/legacy/ActorUniqueID.h"
 #include "mc/network/packet/RemoveActorPacket.h"
 #include "mc/network/packet/RemoveActorPacketPayload.h"
@@ -284,7 +284,8 @@ Size carriedSize(CompoundTag const& tag, std::string const& id, Actor const& sta
     if (own.height > 0.f && own.width > 0.f && !uninitialised) return own;
     // U13's measurement of the NBT (a temporary actor where the client can load one, else its table of
     // vanilla mob sizes; babies halved); its 0.6 x 1.8 default means "unknown".
-    auto box     = lo::feature::armpose::entityBox(carry::toSnbt(tag), currentClient() ? currentClient()->getLevel() : nullptr);
+    auto box =
+        lo::feature::armpose::entityBox(carry::toSnbt(tag), currentClient() ? currentClient()->getLevel() : nullptr);
     bool unknown = !box.ok && std::abs(box.width - 0.6f) < 1e-3f && std::abs(box.height - 1.8f) < 1e-3f;
     if (box.width > 0.f && box.height > 0.f && !unknown) return Size{box.height, box.width};
     return half(Size{1.f, 1.f});
@@ -367,17 +368,9 @@ void applyEquipment(Actor& actor, CompoundTag const& tag) {
     auto armor = items("Armor");
     for (std::size_t i = 0; i < armor.size() && i < static_cast<std::size_t>(SharedTypes::Legacy::ArmorSlot::Count);
          ++i) {
-        if (!armor[i].isNull()) {
-            log().info("firstperson: equip armour {} {}", i, armor[i].getTypeName());
-            actor.setArmor(static_cast<SharedTypes::Legacy::ArmorSlot>(i), armor[i]);
-            log().info("firstperson: equip armour done");
-        }
+        if (!armor[i].isNull()) actor.setArmor(static_cast<SharedTypes::Legacy::ArmorSlot>(i), armor[i]);
     }
-    if (auto hand = items("Mainhand"); !hand.empty() && !hand[0].isNull()) {
-        log().info("firstperson: equip hand {}", hand[0].getTypeName());
-        actor.setCarriedItem(hand[0]);
-        log().info("firstperson: equip hand done");
-    }
+    if (auto hand = items("Mainhand"); !hand.empty() && !hand[0].isNull()) actor.setCarriedItem(hand[0]);
     if (auto off = items("Offhand"); !off.empty() && !off[0].isNull()) actor.setOffhandSlot(off[0]);
 }
 
@@ -562,6 +555,9 @@ bool renderCarried(ItemInHandRenderer& self, BaseActorRenderContext& ctx, ItemCo
     }
     case CarryVisual::Kind::Entity: {
         kind = DrawStatus::Kind::Entity;
+        // A display actor of these types crashes the actor renderer (an armour stand needs its pose data,
+        // which only a real one has); Carry On's default blacklist keeps them from being carried anyway.
+        if (c.what == "minecraft:armor_stand") break;
         // Built first so that its size is known.
         if (!standInActor(*player, c.visual.entity)) break;
         auto const& size = standIn().size;
