@@ -528,8 +528,8 @@ into their animation group themselves.
 `settings.renderArms` with its hello (`net::renderArms`, logged `net: <name> has renderArms on|off`) and says hello
 again whenever its loaded value changes (repeated until welcomed); the server plays no arm pose to a viewer with it
 off (the reset animations when it turns off while a pose shows) and plays it again when it turns back on. The client
-re-reads `carryon_client.json` at game start and on `/carryon reload` in a local world [LO] (on a dedicated server
-the command reloads the server's files only). Vanilla clients have no client config: on.
+re-reads `carryon_client.json` at game start, on `/carryon reload` in a local world, and in a dedicated-server world
+whenever the file changes (§5.2). Vanilla clients have no client config: on.
 
 **Stand-in for vanilla clients**: the server sends client-only display actors (never present on the server) to
 vanilla clients only: a block display (e.g. a non-falling `falling_block` with the block's runtime id) or an entity of
@@ -657,6 +657,11 @@ list identical for add-ons that reuse those ids).
 | `settings` | `rotateEntitiesSideways` | false | Carried entities rotated 90°. |
 | `settings` | `renderArms` | true | Arm pose while carrying. |
 | `modelOverrides` | `modelOverrides` | list below | Render replacements. |
+
+Live changes [LO] (Carry On applies its in-game config screen at once; LiftOff has no screen): in a
+dedicated-server world the client checks the file's modification time about once a second and reloads it when it
+changed and parses (`client config: reloaded carryon_client.json`); every setting then applies at once (renderArms
+is sent to the server, model overrides are recompiled). In a local world `/carryon reload` reloads it.
 
 Default `modelOverrides`:
 
