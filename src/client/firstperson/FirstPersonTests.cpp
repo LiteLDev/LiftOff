@@ -210,6 +210,80 @@ LO_REGISTER_SELFTEST("firstperson.pig", [](Context& ctx) -> ll::coro::CoroTask<>
     co_await showCarry(ctx, CarryData{.type = CarryType::Entity, .entity = snbt}, Kind::Entity, "minecraft:pig");
 });
 
+// Rejoining while carrying (e2e scenario only: the real player has the tag `lo_fp_rejoin`; without it
+// both tests do nothing, so a full selftest run never leaves a carry behind). `rejoin_hold` gives the
+// player a pig and keeps it; the scenario leaves the world and joins it again; `rejoin_check` waits
+// until the pig is drawn in first person, holds it for a screenshot and clears it.
+constexpr char const* kRejoinTag = "lo_fp_rejoin";
+
+LO_REGISTER_SELFTEST("firstperson.rejoin_hold", [](Context& ctx) -> ll::coro::CoroTask<> {
+    auto* p = localPlayer();
+    if (!p || !p->hasTag(kRejoinTag)) {
+        ctx.info("not in the rejoin scenario: skipped");
+        co_return;
+    }
+    ctx.require(!carry::isCarrying(*p), "the local player carries nothing");
+    auto pos = ctx.testPos(1040);
+    ctx.require(co_await ctx.ensureLoaded(pos), "test area loaded");
+    auto  level  = ll::service::getLevel();
+    auto& region = ctx.player().getDimensionBlockSource();
+    auto* pig    = level->getSpawner().spawnMob(
+        region,
+        ActorDefinitionIdentifier("minecraft:pig"),
+        nullptr,
+        lo::game::blockPos(pos).bottomCenter(),
+        false,
+        false,
+        false
+    );
+    ctx.require(pig != nullptr, "a pig spawned");
+    co_await ctx.ticks(2);
+    auto snbt = carry::captureActor(*pig);
+    carry::removeCapturedActor(*pig);
+    auto uid = p->getOrCreateUniqueID();
+    carry::set(*p, CarryData{.type = CarryType::Entity, .entity = snbt});
+    bool drawn = false;
+    for (int i = 0; i < 200 && !drawn; ++i) {
+        co_await ctx.ticks(1);
+        auto st = fp::status();
+        drawn   = st.kind == Kind::Entity && st.frames > 2 && st.actorAlive;
+    }
+    ctx.check(drawn, "drawn before leaving");
+    auto* again = level->getPlayer(uid);
+    ctx.check(again && carry::isCarrying(*again), "still carrying (kept for the rejoin)");
+});
+
+LO_REGISTER_SELFTEST("firstperson.rejoin_check", [](Context& ctx) -> ll::coro::CoroTask<> {
+    auto* p = localPlayer();
+    if (!p || !p->hasTag(kRejoinTag)) {
+        ctx.info("not in the rejoin scenario: skipped");
+        co_return;
+    }
+    auto uid = p->getOrCreateUniqueID();
+    ctx.require(carry::isCarrying(*p), "the carry survived leaving the world");
+    bool drawn = false;
+    for (int i = 0; i < 200 && !drawn; ++i) {
+        co_await ctx.ticks(1);
+        auto st = fp::status();
+        drawn   = st.kind == Kind::Entity && st.what == "minecraft:pig" && st.frames > 2 && st.actorAlive;
+    }
+    ctx.check(drawn, "the pig is drawn in first person after rejoining");
+    ctx.info("holding minecraft:pig");
+    co_await ctx.ticks(kHoldTicks);
+    auto level = ll::service::getLevel();
+    if (auto* again = level ? level->getPlayer(uid) : nullptr) {
+        carry::clear(*again);
+        again->removeTag(kRejoinTag);
+    }
+    bool released = false;
+    for (int i = 0; i < 100 && !released; ++i) {
+        co_await ctx.ticks(1);
+        auto now = fp::status();
+        released = now.kind == Kind::None && !now.actorAlive;
+    }
+    ctx.check(released, "the renderer released the carry");
+});
+
 // A carried entity the client never saw (rejoined while carrying, or picked up out of its sight): a
 // sheep spawned 400 blocks away, outside the client's view, with an orange fleece.
 LO_REGISTER_SELFTEST("firstperson.unseen_sheep", [](Context& ctx) -> ll::coro::CoroTask<> {

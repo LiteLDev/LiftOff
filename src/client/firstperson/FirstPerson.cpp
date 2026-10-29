@@ -51,6 +51,8 @@
 #include "mc/world/actor/ActorDefinitionIdentifier.h"
 #include "mc/world/actor/ActorFactory.h"
 #include "mc/world/actor/ActorFlags.h"
+#include "mc/world/actor/ActorInitializationMethod.h"
+#include "mc/util/VariantParameterList.h"
 #include "mc/world/actor/DataItem2.h"
 #include "mc/world/actor/Mob.h"
 #include "mc/world/actor/SynchedActorDataEntityWrapper.h"
@@ -258,7 +260,14 @@ Size carriedSize(CompoundTag const& tag, std::string const& id, Actor const& sta
             return other->isBaby() == baby ? s : (baby ? half(s) : Size{s.height * 2.f, s.width * 2.f});
         }
     }
-    // The stand-in's own box (the defaults of an uninitialised actor are 0.6 x 1.8).
+    // The stand-in's own box, from its definition's components (a display actor is not initialised
+    // from them: the defaults are 0.6 x 1.8).
+    auto& self = const_cast<Actor&>(standIn);
+    try {
+        VariantParameterList params{};
+        params.mSelf = &self;
+        self.initializeComponents(ActorInitializationMethod::Spawned, params);
+    } catch (...) {}
     Size own{carry::entityHeight(standIn), carry::entityWidth(standIn)};
     if (own.height > 0.f && own.width > 0.f) return own;
     return Size{1.f, 1.f};

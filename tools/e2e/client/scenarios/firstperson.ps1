@@ -85,12 +85,25 @@ Invoke-HeldSelfTest 'firstperson.unseen_sheep' {
     $script:sheepShot = Save-Screenshot 'unseen-sheep'
 } | Out-Null
 
-# TEMP calibration: the pause screen (for the rejoin case).
+Save-Screenshot 'after' | Out-Null
+
+# Rejoining while carrying: the client never sees the pickup of the pig it carries after joining again.
+Invoke-Chat '/tag @s add lo_fp_rejoin'
+Invoke-SelfTest 'firstperson.rejoin_hold' -TimeoutSeconds 60 | Out-Null
 Press-Key ESC; Start-Sleep -Milliseconds 1500
 Save-Screenshot 'pause' | Out-Null
-Press-Key ESC; Start-Sleep -Milliseconds 800
-
-Save-Screenshot 'after' | Out-Null
+Click 0.293 0.667 -Relative                     # Save & Quit
+Start-Sleep -Seconds 12                          # back at the title screen
+Save-Screenshot 'left-world' | Out-Null
+$rejoinMark = Get-LogMark
+Enter-TestWorld
+Wait-LogLine 'net: the server runs LiftOff' 120 -Since $rejoinMark | Out-Null
+Start-Sleep -Seconds 3
+Invoke-HeldSelfTest 'firstperson.rejoin_check' {
+    Start-Sleep -Milliseconds 300
+    $script:rejoinShot = Save-Screenshot 'pig-after-rejoin'
+} | Out-Null
+Assert-Drawn 'the pig carried across a rejoin' $empty $script:rejoinShot
 Assert-Drawn 'the carried unseen sheep' $empty $script:sheepShot
 Assert-Drawn 'the carried chest' $empty $script:chestShot
 Assert-Drawn 'the carried pig' $empty $script:pigShot
