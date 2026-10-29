@@ -4,6 +4,8 @@
 # reloads its config there): the client says hello again and the pose appears.
 # Screenshots: out/armpose-noarms*/<mode>-{carriers,self-front}-off.png, local also -on.png
 $m = $script:Mode
+# The server (integrated or [host]) logged the setting from our hello.
+Wait-LogLine 'net: \S+ has renderArms off' 60 | Out-Null
 Invoke-Chat '/time set noon'
 Invoke-Chat '/tag @s add lo_armpose_showcase'
 $mark = Get-LogMark
@@ -19,7 +21,9 @@ Invoke-Chat '/camera @s clear'
 if ($m -eq 'local') {
     $cfg = Join-Path (Join-Path (Join-Path $script:ModsDir $script:ModName) 'config') 'carryon_client.json'
     (Get-Content $cfg -Raw) -replace '"renderArms"\s*:\s*false', '"renderArms": true' | Set-Content -Encoding utf8NoBOM $cfg
+    $reload = Get-LogMark
     Invoke-Chat '/carryon reload'
+    Wait-LogLine 'net: \S+ has renderArms on' 30 -Since $reload | Out-Null
     Start-Sleep -Seconds 3
     Save-Screenshot "$m-carriers-on" | Out-Null
     Invoke-Chat '/camera @s set minecraft:third_person_front'

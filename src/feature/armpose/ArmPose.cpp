@@ -116,7 +116,7 @@ struct Pair {
     int           dim     = 0;
     std::uint64_t standIn = 0;     ///< id shown, 0 = none
     bool          modded  = false; ///< the viewer runs the client mod (no stand-in)
-    bool          arms    = true;  ///< the arm pose was sent (off: the viewer's renderArms is false)
+    bool          arms    = false; ///< an arm pose was sent (not reset since)
 };
 
 struct PairKey {
@@ -199,7 +199,7 @@ std::vector<ap::SlotAnimation> const& noPose() {
 void endPair(Player const* viewer, Player const* carrier, Pair const& pair) {
     if (!viewer) return;
     if (pair.standIn) sendRemove(*viewer, pair.standIn);
-    if (carrier) sendAnimations(*viewer, *carrier, noPose());
+    if (carrier && pair.arms) sendAnimations(*viewer, *carrier, noPose());
 }
 
 /// Rebuilds a carrier's pose and stand-in after its carry changed.
@@ -295,7 +295,8 @@ void tick() {
             // renderArms is the viewer's client setting (Carry On draws the pose per client).
             bool arms = net::renderArms(*viewer);
             if (pair.version != c.version || resend) {
-                sendAnimations(*viewer, *carrier, arms ? c.anims : noPose());
+                // Viewers with renderArms off get nothing, or the reset if a pose was showing.
+                if (arms || pair.arms) sendAnimations(*viewer, *carrier, arms ? c.anims : noPose());
                 pair.arms = arms;
                 // A (re)announced carrier may have lost its stand-in on that client too: show it again.
                 if (!self && !pair.modded) {

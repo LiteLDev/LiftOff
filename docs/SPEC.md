@@ -525,9 +525,11 @@ via `AnimateEntityPacket` (one runtime controller per arm axis, crouching read f
 quantised to 0.05 rad; an empty animation ends a slot when the carry ends). Modded clients load the animation file
 into their animation group themselves.
 `renderArms` is a per-viewer client setting, as in Carry On: a modded client sends its `carryon_client.json`
-`settings.renderArms` with its hello (`net::renderArms`) and says hello again whenever the value changes (e.g. after
-`/carryon reload`); the server plays no arm pose to a viewer with it off (the reset animations when it turns off
-while someone carries) and plays it again when it turns back on. Vanilla clients have no client config: on.
+`settings.renderArms` with its hello (`net::renderArms`, logged `net: <name> has renderArms on|off`) and says hello
+again whenever its loaded value changes (repeated until welcomed); the server plays no arm pose to a viewer with it
+off (the reset animations when it turns off while a pose shows) and plays it again when it turns back on. The client
+re-reads `carryon_client.json` at game start and on `/carryon reload` in a local world [LO] (on a dedicated server
+the command reloads the server's files only). Vanilla clients have no client config: on.
 
 **Stand-in for vanilla clients**: the server sends client-only display actors (never present on the server) to
 vanilla clients only: a block display (e.g. a non-falling `falling_block` with the block's runtime id) or an entity of

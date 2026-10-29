@@ -242,9 +242,7 @@ LO_REGISTER_SELFTEST("armpose.render_arms", [](Context& ctx) -> ll::coro::CoroTa
     auto data = blockCarry("minecraft:stone");
     carry::set(*carrier, data);
     co_await ctx.ticks(2);
-    auto off  = ofKind(armpose::takeTestPackets(*viewer), "animate");
-    bool none = !off.empty() && std::all_of(off.begin(), off.end(), [](auto const& p) { return p.name == ap::kNoneAnimation; });
-    ctx.check(none && off.size() == ap::allControllers().size(), "renderArms off: only the reset animations");
+    ctx.check(ofKind(armpose::takeTestPackets(*viewer), "animate").empty(), "renderArms off: no arm pose at all");
     auto want = ap::vanillaAnimations(armpose::poseFor(data));
     ctx.check(sameAnimations(armpose::takeTestPackets(*carrier), want), "the carrier's own client still gets its pose");
 
@@ -255,8 +253,8 @@ LO_REGISTER_SELFTEST("armpose.render_arms", [](Context& ctx) -> ll::coro::CoroTa
 
     net::injectFromClient(*viewer, "HelloPacket", hello(false));
     co_await ctx.ticks(2);
-    off  = ofKind(armpose::takeTestPackets(*viewer), "animate");
-    none = !off.empty() && std::all_of(off.begin(), off.end(), [](auto const& p) { return p.name == ap::kNoneAnimation; });
+    auto off  = ofKind(armpose::takeTestPackets(*viewer), "animate");
+    bool none = !off.empty() && std::all_of(off.begin(), off.end(), [](auto const& p) { return p.name == ap::kNoneAnimation; });
     ctx.check(none && off.size() == ap::allControllers().size(), "turned off while carrying: the pose is reset");
     co_await ctx.ticks(2);
     ctx.check(armpose::takeTestPackets(*viewer).empty(), "nothing more while nothing changes");

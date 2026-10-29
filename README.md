@@ -27,6 +27,8 @@ of the carried block or mob (a carried chest shows no block), but no first-perso
 
 - In first person a carried mob stays upright when you look up or down, can be hidden by a wall closer than about
   2.5 blocks, and is not drawn if your client never saw the pickup (for example after rejoining while carrying).
+- A changed `renderArms` in `carryon_client.json` applies after `/carryon reload` in a local world, or after
+  restarting the game (on a server, `/carryon reload` reloads the server's files).
 - Players without the client mod may briefly see the hotbar slot change or the block-breaking crack while carrying.
 
 ## Install

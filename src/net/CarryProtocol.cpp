@@ -2,6 +2,7 @@
 
 #include "net/CarryProtocol.h"
 
+#include <atomic>
 #include <exception>
 #include <mutex>
 #include <unordered_map>
@@ -135,7 +136,13 @@ void handleHello(Player& player, Json const& payload) {
     // Client settings ride on the hello (old servers ignore the field); a client says hello again
     // when they change.
     if (auto it = payload.find("renderArms"); it != payload.end() && it->is_boolean()) {
-        s.renderArms[idOf(player)] = it->get<bool>();
+        bool arms = it->get<bool>();
+        auto old  = s.renderArms.find(idOf(player));
+        bool was  = old == s.renderArms.end() || old->second; // unknown = on
+        s.renderArms[idOf(player)] = arms;
+        if (was != arms) {
+            log().info("net: {} has renderArms {}", player.getRealName(), arms ? "on" : "off");
+        }
     }
     bool known = !s.modded.insert(idOf(player)).second;
     sendTo(player, WelcomePacket(Json{{"protocol", kProtocolVersion}}));
@@ -255,7 +262,15 @@ struct ClientState {
     int                                                                               helloSent = 0;
     int                                                                               ticks     = 0;
     bool                                                                              sentRenderArms = true;
+    int  settingsRetries = 0; ///< re-hellos left for a changed setting until the server welcomes again
+    int  settingsWait    = 0;
 };
+/// The client's renderArms as last loaded. Written by the thread that loads the configs (mod load,
+/// `/carryon reload` on the integrated server), read on the client thread.
+std::atomic<bool>& desiredRenderArms() {
+    static std::atomic<bool> v{true};
+    return v;
+}
 ClientState& state() {
     static ClientState s;
     return s;
@@ -263,7 +278,7 @@ ClientState& state() {
 constexpr int kHelloInterval = 40; ///< ticks between hello retries
 constexpr int kHelloAttempts = 15;
 
-bool configRenderArms() { return config::get<feature::carry::CarryClientConfig>().settings.renderArms; }
+bool configRenderArms() { return desiredRenderArms().load(); }
 
 void sendHello() {
     bool arms = configRenderArms();
@@ -341,6 +356,7 @@ public:
     void handlePacket(NetworkIdentifier const&, NetEventCallback&, WelcomePacket const& packet) const {
         safely("WelcomePacket", [&] {
             auto& s = client::carry::state();
+            s.settingsRetries = 0; // the server read our latest hello
             if (s.welcomed) return;
             s.welcomed = true;
             log().info("net: the server runs LiftOff (protocol {})", packet.payload.value("protocol", 0));
@@ -404,6 +420,11 @@ public:
     // Client listeners at mod load, before the game's threads run.
     void load() {
         auto& bus = ll::event::EventBus::getInstance();
+        auto  syncSetting = [] {
+            client::carry::desiredRenderArms() = config::get<feature::carry::CarryClientConfig>().settings.renderArms;
+        };
+        syncSetting();
+        config::onReload(syncSetting);
         mClientListeners.push_back(bus.emplaceListener<ll::event::ClientJoinLevelEvent>([](auto&) {
             auto& s     = client::carry::state();
             s.inLevel   = true;
@@ -427,9 +448,18 @@ public:
         }));
         mClientListeners.push_back(bus.emplaceListener<ll::event::ClientLevelTickEvent>([](auto&) {
             auto& s = client::carry::state();
-            // A changed client setting (`/carryon reload`, ...) reaches the server with a new hello.
-            if (s.inLevel && s.welcomed && s.sentRenderArms != client::carry::configRenderArms()) {
-                client::carry::sendHello();
+            // A changed client setting (`/carryon reload` in a local world, ...) reaches the server
+            // with a new hello, repeated until the server answers it with a welcome.
+            if (s.inLevel && s.welcomed) {
+                if (s.sentRenderArms != client::carry::configRenderArms()) {
+                    s.settingsRetries = 5;
+                    s.settingsWait    = 0;
+                }
+                if (s.settingsRetries > 0 && --s.settingsWait <= 0) {
+                    --s.settingsRetries;
+                    s.settingsWait = client::carry::kHelloInterval;
+                    client::carry::sendHello();
+                }
                 return;
             }
             if (!s.inLevel || s.welcomed || s.helloSent >= client::carry::kHelloAttempts) return;
