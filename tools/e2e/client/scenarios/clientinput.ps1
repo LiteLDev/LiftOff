@@ -54,7 +54,8 @@ try {
 
     $mark = Get-LogMark
     Focus-Game; Press-Key E; Start-Sleep -Milliseconds 1500
-    Wait-LogLine 'clientinput: closed .+ while carrying' 10 -Since $mark | Out-Null
+    # The client closes the screen; with the U6 server restrictions the server refuses it first.
+    Wait-LogLine '(clientinput: closed .+ while carrying|restrictions: (refused the inventory|closed the container screen))' 10 -Since $mark | Out-Null
     Save-Screenshot 'inventory-closed' | Out-Null
 
     # Look at the ground and middle-click it (pick block).

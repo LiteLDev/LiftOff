@@ -13,7 +13,8 @@ Focus-Game
 Press-Key '3'
 Press-Key '7'
 Scroll 2
-Wait-LogLine 'restrictions: kept .* on hotbar slot' 20 -Since $mark | Out-Null
+# The server snaps the slot back; with the U9 client lock the client already refuses the change.
+Wait-LogLine '(restrictions: kept .* on hotbar slot|clientinput: hotbar slot change to \d blocked while carrying)' 20 -Since $mark | Out-Null
 Start-Sleep -Milliseconds 800
 Save-Screenshot 'after-keys' | Out-Null
 
