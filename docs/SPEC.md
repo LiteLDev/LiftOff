@@ -520,11 +520,14 @@ Arm pose when `renderArms` is true and the carrier is not swimming or gliding, i
 Script `rotation_left_arm` / `rotation_right_arm` replace the given axes; `render_left_arm` /
 `render_right_arm` false → vanilla pose for that arm.
 
-Implementation: a resource-pack player animation (+ controller) that sets the arm bones. Modded clients drive it
-with exact values (molang variables set natively; their own `renderArms`). Vanilla clients get it from the server
-via `AnimateEntityPacket` (stop expression ends it when the carry ends); variants per carried kind with crouching
-read from `query.is_sneaking`, offset quantised to 0.05 rad and clamped to [−0.65, 0.2], server default
-`renderArms` = true.
+Implementation: resource-pack player animations that set the arm bones, played by the server on every client
+via `AnimateEntityPacket` (one runtime controller per arm axis, crouching read from `query.is_sneaking`, values
+quantised to 0.05 rad; an empty animation ends a slot when the carry ends). Modded clients load the animation file
+into their animation group themselves.
+`renderArms` is a per-viewer client setting, as in Carry On: a modded client sends its `carryon_client.json`
+`settings.renderArms` with its hello (`net::renderArms`) and says hello again whenever the value changes (e.g. after
+`/carryon reload`); the server plays no arm pose to a viewer with it off (the reset animations when it turns off
+while someone carries) and plays it again when it turns back on. Vanilla clients have no client config: on.
 
 **Stand-in for vanilla clients**: the server sends client-only display actors (never present on the server) to
 vanilla clients only: a block display (e.g. a non-falling `falling_block` with the block's runtime id) or an entity of

@@ -32,9 +32,11 @@
 #include "mc/client/player/LocalPlayer.h"
 #endif
 
+#include "feature/carry/CarryConfig.h"
 #include "feature/carry/CarryData.h"
 #include "feature/carry/CarryStore.h"
 #include "game/WorldDb.h"
+#include "mod/Config.h"
 #include "mod/Log.h"
 #include "mod/Module.h"
 
@@ -85,6 +87,7 @@ struct ServerState {
     std::unordered_set<std::int64_t>                                                  modded;
     std::unordered_map<std::int64_t, std::vector<std::pair<std::string, Json>>>       testInbox;
     std::vector<std::function<void(Player&)>>                                         joined;
+    std::unordered_map<std::int64_t, bool>                                            renderArms; ///< reported by modded clients
 };
 ServerState& server() {
     static ServerState s;
@@ -128,6 +131,11 @@ void handleHello(Player& player, Json const& payload) {
     if (protocol != kProtocolVersion) {
         log().warn("{} runs LiftOff protocol {} (server: {}); treated as a vanilla client", player.getRealName(), protocol, kProtocolVersion);
         return;
+    }
+    // Client settings ride on the hello (old servers ignore the field); a client says hello again
+    // when they change.
+    if (auto it = payload.find("renderArms"); it != payload.end() && it->is_boolean()) {
+        s.renderArms[idOf(player)] = it->get<bool>();
     }
     bool known = !s.modded.insert(idOf(player)).second;
     sendTo(player, WelcomePacket(Json{{"protocol", kProtocolVersion}}));
@@ -180,6 +188,13 @@ public:
 
 bool isModded(Player const& player) { return server().modded.contains(idOf(player)); }
 
+bool renderArms(Player const& player) {
+    auto& s = server();
+    if (!s.modded.contains(idOf(player))) return true;
+    auto it = s.renderArms.find(idOf(player));
+    return it == s.renderArms.end() || it->second;
+}
+
 void onModdedJoined(std::function<void(Player&)> fn) { server().joined.push_back(std::move(fn)); }
 
 void sendCarrySync(Player& carrier) { sendToModded(syncPacket(carrier, feature::carry::get(carrier))); }
@@ -202,6 +217,7 @@ void setTestModded(Player const& player, bool modded) {
     } else {
         s.modded.erase(idOf(player));
         s.testInbox.erase(idOf(player));
+        s.renderArms.erase(idOf(player));
     }
 }
 
@@ -238,6 +254,7 @@ struct ClientState {
     bool                                                                              welcomed  = false;
     int                                                                               helloSent = 0;
     int                                                                               ticks     = 0;
+    bool                                                                              sentRenderArms = true;
 };
 ClientState& state() {
     static ClientState s;
@@ -246,8 +263,12 @@ ClientState& state() {
 constexpr int kHelloInterval = 40; ///< ticks between hello retries
 constexpr int kHelloAttempts = 15;
 
+bool configRenderArms() { return config::get<feature::carry::CarryClientConfig>().settings.renderArms; }
+
 void sendHello() {
-    net::HelloPacket(Json{{"protocol", net::kProtocolVersion}}).sendToServer();
+    bool arms = configRenderArms();
+    net::HelloPacket(Json{{"protocol", net::kProtocolVersion}, {"renderArms", arms}}).sendToServer();
+    state().sentRenderArms = arms;
     ++state().helloSent;
 }
 
@@ -406,6 +427,11 @@ public:
         }));
         mClientListeners.push_back(bus.emplaceListener<ll::event::ClientLevelTickEvent>([](auto&) {
             auto& s = client::carry::state();
+            // A changed client setting (`/carryon reload`, ...) reaches the server with a new hello.
+            if (s.inLevel && s.welcomed && s.sentRenderArms != client::carry::configRenderArms()) {
+                client::carry::sendHello();
+                return;
+            }
             if (!s.inLevel || s.welcomed || s.helloSent >= client::carry::kHelloAttempts) return;
             if (++s.ticks % client::carry::kHelloInterval == 0) client::carry::sendHello();
         }));
@@ -422,6 +448,7 @@ public:
             }
             server().modded.erase(idOf(player));
             server().testInbox.erase(idOf(player));
+            server().renderArms.erase(idOf(player));
         }));
         if (!mHooked) {
             mHooked = true;
@@ -431,6 +458,7 @@ public:
             game::db::onWorldClosed([] {
                 server().modded.clear();
                 server().testInbox.clear();
+                server().renderArms.clear();
             });
         }
     }

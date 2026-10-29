@@ -3,7 +3,8 @@
 // LiftOff client <-> server protocol (Carry On's packets, docs/SPEC.md §1, §3.3, §4).
 //
 // Packets (LeviLamina custom packets, one JSON payload each):
-//   HelloPacket            c->s  {protocol}            modded client joined a level (retried until welcomed)
+//   HelloPacket            c->s  {protocol, renderArms} modded client joined a level (retried until welcomed);
+//                                                      sent again when `renderArms` (carryon_client.json) changes
 //   WelcomePacket          s->c  {protocol}            the server runs LiftOff; followed by the carries of the level
 //   KeyPressedPacket       c->s  {pressed}             carry key state changed (Carry On `key_pressed`)
 //   CarrySyncPacket        s->c  {carrier, runtime, data}  a player's carry (Carry On `sync_carry_data`)
@@ -39,6 +40,9 @@ inline constexpr int kProtocolVersion = 1;
 
 /// The player runs the LiftOff client mod (said hello with a compatible protocol).
 [[nodiscard]] bool isModded(Player const& player);
+/// The viewer's `renderArms` client setting (sent with its hello); true for vanilla clients and
+/// modded clients that never sent one. U13 plays the arm pose only for viewers with it on.
+[[nodiscard]] bool renderArms(Player const& player);
 /// Called on the server thread after a modded player said hello (after the welcome + syncs).
 void onModdedJoined(std::function<void(Player&)> fn);
 

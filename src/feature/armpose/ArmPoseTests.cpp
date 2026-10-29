@@ -225,6 +225,49 @@ LO_REGISTER_SELFTEST("armpose.modded_viewer", [](Context& ctx) -> ll::coro::Coro
     teardown(*carrier, *viewer);
 });
 
+// renderArms is a per-viewer client setting: a modded viewer with it off gets no arm pose, the
+// carrier itself (another client) still does; a changed setting arrives with a new hello.
+LO_REGISTER_SELFTEST("armpose.render_arms", [](Context& ctx) -> ll::coro::CoroTask<> {
+    namespace net = lo::net;
+    Player *carrier = nullptr, *viewer = nullptr;
+    ctx.require(co_await setup(ctx, 1360, carrier, viewer), "test area loaded");
+    ctx.check(net::renderArms(*viewer), "vanilla clients: renderArms on");
+    net::setTestModded(*viewer, true);
+    ctx.check(net::renderArms(*viewer), "a modded client that sent nothing: on");
+    auto hello = [](bool arms) { return nlohmann::json{{"protocol", net::kProtocolVersion}, {"renderArms", arms}}; };
+    net::injectFromClient(*viewer, "HelloPacket", hello(false));
+    (void)net::takeTestMessages(*viewer);
+    ctx.check(!net::renderArms(*viewer), "the hello carries renderArms false");
+
+    auto data = blockCarry("minecraft:stone");
+    carry::set(*carrier, data);
+    co_await ctx.ticks(2);
+    auto off  = ofKind(armpose::takeTestPackets(*viewer), "animate");
+    bool none = !off.empty() && std::all_of(off.begin(), off.end(), [](auto const& p) { return p.name == ap::kNoneAnimation; });
+    ctx.check(none && off.size() == ap::allControllers().size(), "renderArms off: only the reset animations");
+    auto want = ap::vanillaAnimations(armpose::poseFor(data));
+    ctx.check(sameAnimations(armpose::takeTestPackets(*carrier), want), "the carrier's own client still gets its pose");
+
+    net::injectFromClient(*viewer, "HelloPacket", hello(true));
+    co_await ctx.ticks(2);
+    ctx.check(net::renderArms(*viewer), "a new hello turns it back on");
+    ctx.check(sameAnimations(armpose::takeTestPackets(*viewer), want), "renderArms on again: the pose is sent");
+
+    net::injectFromClient(*viewer, "HelloPacket", hello(false));
+    co_await ctx.ticks(2);
+    off  = ofKind(armpose::takeTestPackets(*viewer), "animate");
+    none = !off.empty() && std::all_of(off.begin(), off.end(), [](auto const& p) { return p.name == ap::kNoneAnimation; });
+    ctx.check(none && off.size() == ap::allControllers().size(), "turned off while carrying: the pose is reset");
+    co_await ctx.ticks(2);
+    ctx.check(armpose::takeTestPackets(*viewer).empty(), "nothing more while nothing changes");
+
+    net::injectFromClient(*viewer, "HelloPacket", {{"protocol", net::kProtocolVersion}});
+    ctx.check(!net::renderArms(*viewer), "a hello without the field keeps the setting");
+    net::setTestModded(*viewer, false);
+    ctx.check(net::renderArms(*viewer), "forgotten when the player is no longer modded");
+    teardown(*carrier, *viewer);
+});
+
 LO_REGISTER_SELFTEST("armpose.entity", [](Context& ctx) -> ll::coro::CoroTask<> {
     Player *carrier = nullptr, *viewer = nullptr;
     ctx.require(co_await setup(ctx, 1320, carrier, viewer), "test area loaded");
