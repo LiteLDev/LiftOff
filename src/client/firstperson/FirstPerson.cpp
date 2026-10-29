@@ -30,6 +30,7 @@
 #include "mc/client/renderer/BaseActorRenderContext.h"
 #include "mc/client/renderer/actor/ActorRenderer.h"
 #include "mc/client/renderer/actor/v2/DataDrivenRendererV2.h"
+#include "mc/client/renderer/actor/v2/GameplayRelatedRenderData.h"
 #include "mc/client/renderer/game/ItemInHandRenderer.h"
 #include "mc/deps/core/math/Vec2.h"
 #include "mc/deps/core/math/Vec3.h"
@@ -386,8 +387,12 @@ void clientTick(Level& level) {
         }
     }
     if (carried && player) {
-        // Placed every frame by placeCarried; here only what must not show (SPEC §4.1: no name tag).
+        // Placed precisely every frame by placeCarried, which the entity pass only calls for actors in
+        // view: keep it in front of the player between frames.
         if (auto* actor = level.fetchEntity(ActorUniqueID{carried}, false)) {
+            float yaw = glm::radians(player->getRotation().y);
+            Vec3  at  = player->getPosition() + Vec3{-std::sin(yaw) * 1.2f, -0.9f, std::cos(yaw) * 1.2f};
+            actor->moveTo(at, Vec2{0.f, player->getRotation().y});
             if (!actor->getNameTag().empty()) actor->setNameTag("");
         }
     }
@@ -476,6 +481,12 @@ bool placeCarried(Actor& actor) {
     if (actor.hasCategory(ActorCategory::Mob)) static_cast<Mob&>(actor).setYBodyRotations(yaw, yawPrev);
     actor.mScale     = sh.baseScale * sh.scale;
     actor.mScalePrev = sh.baseScale * sh.scale;
+    static bool once = false;
+    if (!once) {
+        once = true;
+        log().info("firstperson: entity placed, feet ({}, {}, {}) in view, scale {} x {}", sh.feetView.x,
+                   sh.feetView.y, sh.feetView.z, sh.baseScale, sh.scale);
+    }
     return true;
 }
 } // namespace
@@ -506,6 +517,39 @@ LL_TYPE_INSTANCE_HOOK(
         if (!draw) return false;
     }
     return origin(actor, renderer, shadowContext);
+}
+
+/// Mobs next to the camera fade out; the carried one is always next to it: no fading while the entity
+/// pass builds a frame with it in first person.
+LL_TYPE_INSTANCE_HOOK(
+    FirstPersonFrameHook,
+    ll::memory::HookPriority::Normal,
+    DataDrivenRendererV2,
+    &DataDrivenRendererV2::generateFrame,
+    uint,
+    GameplayRelatedRenderData const& data
+) {
+    BaseActorRenderContext* ctx = data.mContext;
+    bool                    fp  = false;
+    {
+        auto&           sh = shared();
+        std::lock_guard lock(sh.mutex);
+        fp = sh.carried && sh.firstPerson;
+    }
+    if (!ctx || !fp) return origin(data);
+    float dither                    = ctx->mActorDitheringMaxDistance;
+    bool  meshDither                = ctx->mScreenContext.isDitheringEnabled;
+    ctx->mActorDitheringMaxDistance = 0.f;
+    ctx->mScreenContext.isDitheringEnabled = false;
+    static bool once                = false;
+    if (!once) {
+        once = true;
+        log().info("firstperson: entity frame dithering distance {}, mesh dithering {}", dither, meshDither);
+    }
+    uint result                     = origin(data);
+    ctx->mActorDitheringMaxDistance = dither;
+    ctx->mScreenContext.isDitheringEnabled = meshDither;
+    return result;
 }
 
 /// Mobs next to the camera fade out (dithering); the carried one is always next to it.
@@ -560,6 +604,7 @@ public:
         FirstPersonRenderHook::hook();
         FirstPersonDitherHook::hook();
         FirstPersonQueueHook::hook();
+        FirstPersonFrameHook::hook();
         FirstPersonRemoveActorHook::hook();
         auto& bus = ll::event::EventBus::getInstance();
         mListeners.push_back(bus.emplaceListener<ll::event::ClientExitLevelEvent>([](ll::event::ClientExitLevelEvent&) {
@@ -579,6 +624,7 @@ public:
         FirstPersonRenderHook::unhook();
         FirstPersonDitherHook::unhook();
         FirstPersonQueueHook::unhook();
+        FirstPersonFrameHook::unhook();
         FirstPersonRemoveActorHook::unhook();
         auto& bus = ll::event::EventBus::getInstance();
         for (auto& l : mListeners) bus.removeListener(l);
