@@ -14,7 +14,9 @@
 #include "mc/deps/core/math/Vec3.h"
 #include "mc/deps/nbt/ByteTag.h"
 #include "mc/deps/nbt/CompoundTag.h"
+#include "mc/deps/shared_types/legacy/actor/ArmorSlot.h"
 #include "mc/world/Container.h"
+#include "mc/world/item/ItemStack.h"
 #include "mc/world/actor/Actor.h"
 #include "mc/world/actor/ActorDefinitionIdentifier.h"
 #include "mc/world/actor/Mob.h"
@@ -208,6 +210,41 @@ LO_REGISTER_SELFTEST("firstperson.pig", [](Context& ctx) -> ll::coro::CoroTask<>
     auto snbt = carry::captureActor(*pig);
     carry::removeCapturedActor(*pig);
     co_await showCarry(ctx, CarryData{.type = CarryType::Entity, .entity = snbt}, Kind::Entity, "minecraft:pig");
+});
+
+// Armour and held items of the carried entity: an armour stand with an iron helmet and a diamond sword.
+LO_REGISTER_SELFTEST("firstperson.equipment", [](Context& ctx) -> ll::coro::CoroTask<> {
+    if (!localPlayer()) {
+        ctx.info("no local player: skipped");
+        co_return;
+    }
+    auto pos = ctx.testPos(1060);
+    ctx.require(co_await ctx.ensureLoaded(pos), "test area loaded");
+    auto  level  = ll::service::getLevel();
+    auto& region = ctx.player().getDimensionBlockSource();
+    auto* stand  = level->getSpawner().spawnMob(
+        region,
+        ActorDefinitionIdentifier("minecraft:armor_stand"),
+        nullptr,
+        lo::game::blockPos(pos).bottomCenter(),
+        false,
+        false,
+        false
+    );
+    ctx.require(stand != nullptr, "an armour stand spawned");
+    stand->setArmor(SharedTypes::Legacy::ArmorSlot::Head, lo::game::makeItem("minecraft:iron_helmet"));
+    stand->setCarriedItem(lo::game::makeItem("minecraft:diamond_sword"));
+    co_await ctx.ticks(2);
+    auto snbt = carry::captureActor(*stand);
+    ctx.check(snbt.find("iron_helmet") != std::string::npos, "the helmet is in the NBT");
+    ctx.check(snbt.find("diamond_sword") != std::string::npos, "the sword is in the NBT");
+    carry::removeCapturedActor(*stand);
+    co_await showCarry(
+        ctx,
+        CarryData{.type = CarryType::Entity, .entity = snbt},
+        Kind::Entity,
+        "minecraft:armor_stand"
+    );
 });
 
 // Drawn over a wall right in front of the player (Java draws the hand layer after the world).

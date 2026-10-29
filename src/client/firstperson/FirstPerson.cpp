@@ -40,6 +40,7 @@
 #include "mc/deps/nbt/Int64Tag.h"
 #include "mc/deps/nbt/IntTag.h"
 #include "mc/deps/nbt/ListTag.h"
+#include "mc/deps/shared_types/legacy/actor/ArmorSlot.h"
 #include "mc/deps/nbt/ShortTag.h"
 #include "mc/deps/renderer/Camera.h"
 #include "mc/deps/renderer/MatrixStack.h"
@@ -65,6 +66,7 @@
 #include "mc/world/level/dimension/Dimension.h"
 
 #include "client/Client.h"
+#include "feature/armpose/StandIn.h"
 #include "feature/carry/Capture.h"
 #include "feature/carry/CarryConfig.h"
 #include "feature/carry/CarryData.h"
@@ -280,6 +282,11 @@ Size carriedSize(CompoundTag const& tag, std::string const& id, Actor const& sta
     Size own{carry::entityHeight(standIn), carry::entityWidth(standIn)};
     bool uninitialised = std::abs(own.width - 0.6f) < 1e-3f && std::abs(own.height - 1.8f) < 1e-3f;
     if (own.height > 0.f && own.width > 0.f && !uninitialised) return own;
+    // U13's measurement of the NBT (a temporary actor where the client can load one, else its table of
+    // vanilla mob sizes; babies halved); its 0.6 x 1.8 default means "unknown".
+    auto box     = lo::feature::armpose::entityBox(carry::toSnbt(tag), currentClient() ? currentClient()->getLevel() : nullptr);
+    bool unknown = !box.ok && std::abs(box.width - 0.6f) < 1e-3f && std::abs(box.height - 1.8f) < 1e-3f;
+    if (box.width > 0.f && box.height > 0.f && !unknown) return Size{box.height, box.width};
     return half(Size{1.f, 1.f});
 }
 
@@ -342,6 +349,30 @@ void applyLook(Actor& actor, CompoundTag const& tag) {
     data->assignValues(items, actor, std::nullopt);
 }
 
+/// The equipment of the entity from its NBT: armour (`Armor`, head to feet then body armour), held item
+/// (`Mainhand`) and off-hand item (`Offhand`), each item built from its own tag.
+void applyEquipment(Actor& actor, CompoundTag const& tag) {
+    auto items = [&](char const* key) {
+        std::vector<ItemStack> out;
+        if (!tag.contains(key) || !tag.at(key).hold(Tag::List)) return out;
+        for (auto const& entry : tag.at(key).get<ListTag>()) {
+            if (entry && entry->getId() == Tag::Compound) {
+                out.push_back(ItemStack::fromTag(static_cast<CompoundTag const&>(*entry)));
+            } else {
+                out.emplace_back();
+            }
+        }
+        return out;
+    };
+    auto armor = items("Armor");
+    for (std::size_t i = 0; i < armor.size() && i < static_cast<std::size_t>(SharedTypes::Legacy::ArmorSlot::Count);
+         ++i) {
+        if (!armor[i].isNull()) actor.setArmor(static_cast<SharedTypes::Legacy::ArmorSlot>(i), armor[i]);
+    }
+    if (auto hand = items("Mainhand"); !hand.empty() && !hand[0].isNull()) actor.setCarriedItem(hand[0]);
+    if (auto off = items("Offhand"); !off.empty() && !off[0].isNull()) actor.setOffhandSlot(off[0]);
+}
+
 /// The stand-in actor for the carried entity `snbt` (built once per carry).
 Actor* standInActor(LocalPlayer& player, std::string const& snbt) {
     auto& s      = standIn();
@@ -389,7 +420,10 @@ Actor* standInActor(LocalPlayer& player, std::string const& snbt) {
     }
     // Lighting and the renderer read the actor's dimension: the player's.
     actor->setDimension(player.mDimension);
-    if (!loaded) applyLook(*actor, *tag);
+    if (!loaded) {
+        applyLook(*actor, *tag);
+        applyEquipment(*actor, *tag);
+    }
     actor->setNameTag("");
     s.level = level;
     s.snbt  = snbt;
