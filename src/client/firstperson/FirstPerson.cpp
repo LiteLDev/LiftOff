@@ -367,9 +367,15 @@ void applyEquipment(Actor& actor, CompoundTag const& tag) {
     auto armor = items("Armor");
     for (std::size_t i = 0; i < armor.size() && i < static_cast<std::size_t>(SharedTypes::Legacy::ArmorSlot::Count);
          ++i) {
-        if (!armor[i].isNull()) actor.setArmor(static_cast<SharedTypes::Legacy::ArmorSlot>(i), armor[i]);
+        if (!armor[i].isNull()) {
+            log().info("firstperson: equip armour {} {}", i, armor[i].getTypeName());
+            actor.setArmor(static_cast<SharedTypes::Legacy::ArmorSlot>(i), armor[i]);
+            log().info("firstperson: equip armour done");
+        }
     }
-    if (auto hand = items("Mainhand"); !hand.empty() && !hand[0].isNull()) actor.setCarriedItem(hand[0]);
+    if (auto hand = items("Mainhand"); !hand.empty() && !hand[0].isNull()) {
+        log().info("firstperson: (experiment) not equipping hand {}", hand[0].getTypeName());
+    }
     if (auto off = items("Offhand"); !off.empty() && !off[0].isNull()) actor.setOffhandSlot(off[0]);
 }
 

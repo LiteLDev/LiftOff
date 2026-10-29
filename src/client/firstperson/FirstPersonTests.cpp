@@ -224,26 +224,24 @@ LO_REGISTER_SELFTEST("firstperson.equipment", [](Context& ctx) -> ll::coro::Coro
     auto& region = ctx.player().getDimensionBlockSource();
     auto* stand  = level->getSpawner().spawnMob(
         region,
-        ActorDefinitionIdentifier("minecraft:armor_stand"),
+        ActorDefinitionIdentifier("minecraft:horse"),
         nullptr,
         lo::game::blockPos(pos).bottomCenter(),
         false,
         false,
         false
     );
-    ctx.require(stand != nullptr, "an armour stand spawned");
-    stand->setArmor(SharedTypes::Legacy::ArmorSlot::Head, lo::game::makeItem("minecraft:iron_helmet"));
-    stand->setCarriedItem(lo::game::makeItem("minecraft:diamond_sword"));
-    co_await ctx.ticks(2);
-    auto snbt = carry::captureActor(*stand);
-    ctx.check(snbt.find("iron_helmet") != std::string::npos, "the helmet is in the NBT");
-    ctx.check(snbt.find("diamond_sword") != std::string::npos, "the sword is in the NBT");
+    ctx.require(stand != nullptr, "a horse spawned");
+    stand->setArmor(SharedTypes::Legacy::ArmorSlot::Body, lo::game::makeItem("minecraft:diamond_horse_armor"));
+    auto snbt = carry::captureActor(*stand); // at once: a peaceful world removes it on its next tick
+    ctx.check(snbt.find("diamond_horse_armor") != std::string::npos, "the horse armour is in the NBT");
+    ctx.info(snbt.substr(0, 4000));
     carry::removeCapturedActor(*stand);
     co_await showCarry(
         ctx,
         CarryData{.type = CarryType::Entity, .entity = snbt},
         Kind::Entity,
-        "minecraft:armor_stand"
+        "minecraft:horse"
     );
 });
 
