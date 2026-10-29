@@ -27,7 +27,6 @@ of the carried block or mob (a carried chest shows no block), but no first-perso
 
 - In first person a carried mob stays upright when you look up or down, can be hidden by a wall closer than about
   2.5 blocks, and is not drawn if your client never saw the pickup (for example after rejoining while carrying).
-- The arm pose is sent by the server, so the client setting `renderArms = false` has no effect.
 - Players without the client mod may briefly see the hotbar slot change or the block-breaking crack while carrying.
 
 ## Install
@@ -63,7 +62,7 @@ Or download the zip from the [latest release](https://github.com/LiteLDev/LiftOf
 
 ## Configuration
 
-Settings live in `config/*.json` inside the mod folder (`plugins/LiftOff/` or `mods/LiftOff/`). Each file is created with defaults on first start; `/carryon reload` applies changes.
+Settings live in `config/*.json` inside the mod folder (`plugins/LiftOff/` or `mods/LiftOff/`). Each file is created with defaults on first start; `/carryon reload` applies changes. On a server, a client with the mod applies changes to its own `carryon_client.json` by itself within about a second.
 
 | File | Setting | Default | Meaning |
 | --- | --- | --- | --- |

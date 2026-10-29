@@ -47,6 +47,10 @@ bool loadAll();
 bool saveAll();
 /// Callbacks run after `loadAll()` (e.g. to apply a changed tick interval).
 void onReload(std::function<void()> fn);
+/// Reloads one registered section from its file (no other file is read), then runs the reload
+/// callbacks like `loadAll()`. Returns false if the section is unknown or failed to load.
+/// (The client's live `carryon_client.json` reload in remote worlds.)
+bool reloadSection(std::string const& section);
 
 namespace detail {
 void setConfigDir(std::filesystem::path dir);
