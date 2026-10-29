@@ -1,0 +1,17 @@
+{
+  "lo.carry.cleared": "Cleared {} Item!",
+  "lo.carry.cleared_plural": "Cleared {} Items!",
+  "lo.carry.placed": "Placed {} Item!",
+  "lo.carry.placed_plural": "Placed {} Items!",
+  "lo.carry.debug.block": "Block: {}",
+  "lo.carry.debug.blockstate": "BlockState: {}",
+  "lo.carry.debug.nbt": "NBT: {}",
+  "lo.carry.debug.override": "Override Model: {}",
+  "lo.carry.debug.condition": "Custom Pickup Condition: {}",
+  "lo.carry.debug.entity": "Entity: {}",
+  "lo.carry.debug.entity_name": "Entity Name: {}",
+  "lo.carry.debug.player": "Carrying Player.",
+  "lo.lifecycle.need_player": "This command needs a player; name the targets.",
+  "lo.lifecycle.need_op": "You need operator permission.",
+  "lo.lifecycle.no_targets": "No targets matched selector"
+}

@@ -1,0 +1,17 @@
+{
+  "lo.carry.cleared": "已清除 {} 个物品！",
+  "lo.carry.cleared_plural": "已清除 {} 个物品！",
+  "lo.carry.placed": "已放置 {} 个物品！",
+  "lo.carry.placed_plural": "已放置 {} 个物品！",
+  "lo.carry.debug.block": "方块：{}",
+  "lo.carry.debug.blockstate": "方块状态：{}",
+  "lo.carry.debug.nbt": "NBT：{}",
+  "lo.carry.debug.override": "覆盖模型：{}",
+  "lo.carry.debug.condition": "自定义拾取条件：{}",
+  "lo.carry.debug.entity": "实体：{}",
+  "lo.carry.debug.entity_name": "实体名称：{}",
+  "lo.carry.debug.player": "正在搬运玩家。",
+  "lo.lifecycle.need_player": "此命令需要玩家执行；请指定目标。",
+  "lo.lifecycle.need_op": "你需要管理员权限。",
+  "lo.lifecycle.no_targets": "没有与选择器匹配的目标"
+}
