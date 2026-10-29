@@ -49,4 +49,20 @@ bool saveAll() {
 
 void onReload(std::function<void()> fn) { gReloadCallbacks.push_back(std::move(fn)); }
 
+bool reloadSection(std::string const& section) {
+    for (auto const& e : ConfigRegistry::entries()) {
+        if (e.section != section) continue;
+        auto path = gDir / (e.section + ".json");
+        try {
+            if (!e.load(path)) return false;
+        } catch (std::exception const& ex) {
+            log().error("config {}: failed to load {}: {}", e.section, path.string(), ex.what());
+            return false;
+        }
+        for (auto const& cb : gReloadCallbacks) cb();
+        return true;
+    }
+    return false;
+}
+
 } // namespace lo::config

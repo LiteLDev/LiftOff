@@ -116,6 +116,7 @@ struct Pair {
     int           dim     = 0;
     std::uint64_t standIn = 0;     ///< id shown, 0 = none
     bool          modded  = false; ///< the viewer runs the client mod (no stand-in)
+    bool          arms    = false; ///< an arm pose was sent (not reset since)
 };
 
 struct PairKey {
@@ -188,11 +189,17 @@ void sendStandIn(Player const& viewer, StandIn const& s, Placement const& at) {
     if (s.equip) send(viewer, s.equip, {"equip", s.item, {{"id", s.id}}});
 }
 
+/// Every slot back to the vanilla pose.
+std::vector<ap::SlotAnimation> const& noPose() {
+    static auto const none = ap::vanillaAnimations(ap::Pose{});
+    return none;
+}
+
 /// Ends everything a viewer was shown for a carrier (no carry any more, out of view, viewer turned modded).
 void endPair(Player const* viewer, Player const* carrier, Pair const& pair) {
     if (!viewer) return;
     if (pair.standIn) sendRemove(*viewer, pair.standIn);
-    if (carrier) sendAnimations(*viewer, *carrier, ap::vanillaAnimations(ap::Pose{}));
+    if (carrier && pair.arms) sendAnimations(*viewer, *carrier, noPose());
 }
 
 /// Rebuilds a carrier's pose and stand-in after its carry changed.
@@ -285,8 +292,12 @@ void tick() {
             if (pair.version >= 0 && pair.dim != dim) pair = Pair{}; // the client dropped every actor
             pair.dim = dim;
             if (pair.version < 0) pair.modded = net::isModded(*viewer);
+            // renderArms is the viewer's client setting (Carry On draws the pose per client).
+            bool arms = net::renderArms(*viewer);
             if (pair.version != c.version || resend) {
-                sendAnimations(*viewer, *carrier, c.anims);
+                // Viewers with renderArms off get nothing, or the reset if a pose was showing.
+                if (arms || pair.arms) sendAnimations(*viewer, *carrier, arms ? c.anims : noPose());
+                pair.arms = arms;
                 // A (re)announced carrier may have lost its stand-in on that client too: show it again.
                 if (!self && !pair.modded) {
                     if (pair.standIn) sendRemove(*viewer, pair.standIn);
@@ -297,8 +308,14 @@ void tick() {
                     }
                 }
                 pair.version = c.version;
-            } else if (moved && pair.standIn) {
-                send(*viewer, movePacket(c.standIn, *at), {"move", "", {{"id", c.standIn.id}}});
+            } else {
+                if (pair.arms != arms) {
+                    sendAnimations(*viewer, *carrier, arms ? c.anims : noPose());
+                    pair.arms = arms;
+                }
+                if (moved && pair.standIn) {
+                    send(*viewer, movePacket(c.standIn, *at), {"move", "", {{"id", c.standIn.id}}});
+                }
             }
         }
         if (at) c.placed = at;

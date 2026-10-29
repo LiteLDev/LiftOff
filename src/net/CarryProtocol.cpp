@@ -2,6 +2,7 @@
 
 #include "net/CarryProtocol.h"
 
+#include <atomic>
 #include <exception>
 #include <mutex>
 #include <unordered_map>
@@ -32,9 +33,11 @@
 #include "mc/client/player/LocalPlayer.h"
 #endif
 
+#include "feature/carry/CarryConfig.h"
 #include "feature/carry/CarryData.h"
 #include "feature/carry/CarryStore.h"
 #include "game/WorldDb.h"
+#include "mod/Config.h"
 #include "mod/Log.h"
 #include "mod/Module.h"
 
@@ -85,6 +88,7 @@ struct ServerState {
     std::unordered_set<std::int64_t>                                                  modded;
     std::unordered_map<std::int64_t, std::vector<std::pair<std::string, Json>>>       testInbox;
     std::vector<std::function<void(Player&)>>                                         joined;
+    std::unordered_map<std::int64_t, bool>                                            renderArms; ///< reported by modded clients
 };
 ServerState& server() {
     static ServerState s;
@@ -128,6 +132,17 @@ void handleHello(Player& player, Json const& payload) {
     if (protocol != kProtocolVersion) {
         log().warn("{} runs LiftOff protocol {} (server: {}); treated as a vanilla client", player.getRealName(), protocol, kProtocolVersion);
         return;
+    }
+    // Client settings ride on the hello (old servers ignore the field); a client says hello again
+    // when they change.
+    if (auto it = payload.find("renderArms"); it != payload.end() && it->is_boolean()) {
+        bool arms = it->get<bool>();
+        auto old  = s.renderArms.find(idOf(player));
+        bool was  = old == s.renderArms.end() || old->second; // unknown = on
+        s.renderArms[idOf(player)] = arms;
+        if (was != arms) {
+            log().info("net: {} has renderArms {}", player.getRealName(), arms ? "on" : "off");
+        }
     }
     bool known = !s.modded.insert(idOf(player)).second;
     sendTo(player, WelcomePacket(Json{{"protocol", kProtocolVersion}}));
@@ -180,6 +195,13 @@ public:
 
 bool isModded(Player const& player) { return server().modded.contains(idOf(player)); }
 
+bool renderArms(Player const& player) {
+    auto& s = server();
+    if (!s.modded.contains(idOf(player))) return true;
+    auto it = s.renderArms.find(idOf(player));
+    return it == s.renderArms.end() || it->second;
+}
+
 void onModdedJoined(std::function<void(Player&)> fn) { server().joined.push_back(std::move(fn)); }
 
 void sendCarrySync(Player& carrier) { sendToModded(syncPacket(carrier, feature::carry::get(carrier))); }
@@ -202,6 +224,7 @@ void setTestModded(Player const& player, bool modded) {
     } else {
         s.modded.erase(idOf(player));
         s.testInbox.erase(idOf(player));
+        s.renderArms.erase(idOf(player));
     }
 }
 
@@ -238,7 +261,16 @@ struct ClientState {
     bool                                                                              welcomed  = false;
     int                                                                               helloSent = 0;
     int                                                                               ticks     = 0;
+    bool                                                                              sentRenderArms = true;
+    int  settingsRetries = 0; ///< re-hellos left for a changed setting until the server welcomes again
+    int  settingsWait    = 0;
 };
+/// The client's renderArms as last loaded. Written by the thread that loads the configs (mod load,
+/// `/carryon reload` on the integrated server), read on the client thread.
+std::atomic<bool>& desiredRenderArms() {
+    static std::atomic<bool> v{true};
+    return v;
+}
 ClientState& state() {
     static ClientState s;
     return s;
@@ -246,8 +278,12 @@ ClientState& state() {
 constexpr int kHelloInterval = 40; ///< ticks between hello retries
 constexpr int kHelloAttempts = 15;
 
+bool configRenderArms() { return desiredRenderArms().load(); }
+
 void sendHello() {
-    net::HelloPacket(Json{{"protocol", net::kProtocolVersion}}).sendToServer();
+    bool arms = configRenderArms();
+    net::HelloPacket(Json{{"protocol", net::kProtocolVersion}, {"renderArms", arms}}).sendToServer();
+    state().sentRenderArms = arms;
     ++state().helloSent;
 }
 
@@ -320,6 +356,7 @@ public:
     void handlePacket(NetworkIdentifier const&, NetEventCallback&, WelcomePacket const& packet) const {
         safely("WelcomePacket", [&] {
             auto& s = client::carry::state();
+            s.settingsRetries = 0; // the server read our latest hello
             if (s.welcomed) return;
             s.welcomed = true;
             log().info("net: the server runs LiftOff (protocol {})", packet.payload.value("protocol", 0));
@@ -383,6 +420,11 @@ public:
     // Client listeners at mod load, before the game's threads run.
     void load() {
         auto& bus = ll::event::EventBus::getInstance();
+        auto  syncSetting = [] {
+            client::carry::desiredRenderArms() = config::get<feature::carry::CarryClientConfig>().settings.renderArms;
+        };
+        syncSetting();
+        config::onReload(syncSetting);
         mClientListeners.push_back(bus.emplaceListener<ll::event::ClientJoinLevelEvent>([](auto&) {
             auto& s     = client::carry::state();
             s.inLevel   = true;
@@ -406,6 +448,20 @@ public:
         }));
         mClientListeners.push_back(bus.emplaceListener<ll::event::ClientLevelTickEvent>([](auto&) {
             auto& s = client::carry::state();
+            // A changed client setting (`/carryon reload` in a local world, ...) reaches the server
+            // with a new hello, repeated until the server answers it with a welcome.
+            if (s.inLevel && s.welcomed) {
+                if (s.sentRenderArms != client::carry::configRenderArms()) {
+                    s.settingsRetries = 5;
+                    s.settingsWait    = 0;
+                }
+                if (s.settingsRetries > 0 && --s.settingsWait <= 0) {
+                    --s.settingsRetries;
+                    s.settingsWait = client::carry::kHelloInterval;
+                    client::carry::sendHello();
+                }
+                return;
+            }
             if (!s.inLevel || s.welcomed || s.helloSent >= client::carry::kHelloAttempts) return;
             if (++s.ticks % client::carry::kHelloInterval == 0) client::carry::sendHello();
         }));
@@ -422,6 +478,7 @@ public:
             }
             server().modded.erase(idOf(player));
             server().testInbox.erase(idOf(player));
+            server().renderArms.erase(idOf(player));
         }));
         if (!mHooked) {
             mHooked = true;
@@ -431,6 +488,7 @@ public:
             game::db::onWorldClosed([] {
                 server().modded.clear();
                 server().testInbox.clear();
+                server().renderArms.clear();
             });
         }
     }
