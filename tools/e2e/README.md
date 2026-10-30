@@ -6,7 +6,7 @@ There are two harnesses, one per LeviLamina platform. Both run the real game bin
 |---|---|---|
 | Runs | Bedrock Dedicated Server + LeviLamina 26.51.7 (`bedrock_server_mod.exe`) | Minecraft 1.26.51 through LeviLauncher (instance `1.26.51.01`) |
 | Mod taken from | `bin/server/LiftOff` | `bin/client/LiftOff` |
-| Driven by | console stdin/stdout | **headless input** through the LeviHeadlessInput mod's pipe (game in the background, your mouse/keyboard untouched; `-Foreground` = real `SendInput`) and window screenshots |
+| Driven by | console stdin/stdout | **headless input** through the BeDD mod's pipe (game in the background, your mouse/keyboard untouched; `-Foreground` = real `SendInput`) and window screenshots |
 | Parallel runs | yes: 3 slots, so 3 runs at a time (more runs wait) | opt-in game-instance slots (`-Slot` / `$env:LEVI_E2E_SLOTS`, see below); default one game (slot 1, lock shared with BEI and BeetrootSkin) |
 | Speed | ~20 s plus the tests | ~2 min plus the tests |
 | Output | `server/out/<scenario>/` `server.log`, `selftest.json` | `client/out/<scenario>/` `*.png`, `client.log`, `selftest.json` |
@@ -25,9 +25,9 @@ pwsh -NoProfile -File tools/e2e/client/run.ps1 -Scenario smoke -Slot 2       # a
 
 ### Headless input and parallel games
 
-Client runs are **headless** by default: [LeviHeadlessInput](https://github.com/LiteLDev/LeviHeadlessInput)
-(clone it to `%USERPROFILE%\Desktop\LeviHeadlessInput` and build it once with `xmake`;
-`$env:LEVI_HEADLESS_INPUT_DIR` can point at another `bin\LeviHeadlessInput`) is deployed next to
+Client runs are **headless** by default: [Be.D.D.](https://github.com/LiteLDev/BeDD)
+(clone it to `%USERPROFILE%\Desktop\BeDD` and build it once with `xmake`;
+`$env:BEDD_DIR` can point at another `bin\BeDD`) is deployed next to
 our mod, and its `harness-shim.ps1` replaces `Click`, `Press-Key`, `Type-Text`, `Scroll`,
 `Move-Mouse`, `Focus-Game`, `Assert-GameForeground` and `Set-GameWindowSize` with versions that
 talk to the mod over a pipe; `[BsE2E.Native]::Key/MouseButton/Wheel/Unicode/MoveRelative` (used
@@ -38,7 +38,7 @@ through GDK GameInput; the mod feeds it a virtual one). With `-KeepOpen` the run
 to the human (headless input off) while it waits.
 
 **Slots.** Slot 1 is the LeviLauncher instance (`bei-e2e.lock`). Slots 2.. are clones,
-`versions\<base>-hi<N>`, made on first use by LeviHeadlessInput's `clone-instance.ps1` (hard links
+`versions\<base>-hi<N>`, made on first use by BeDD's `clone-instance.ps1` (hard links
 and junctions; own `mods\`, `logs\`, worlds) with their own lock `hi<N>-e2e.lock`, so several client
 runs (of this and other projects) can play at once: `-Slot 2`, or `$env:LEVI_E2E_SLOTS = '1,2,3'`
 to take the first free one. Game processes are matched by instance folder, so a run only ever

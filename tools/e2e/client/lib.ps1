@@ -1,5 +1,5 @@
 # LiftOff client e2e helpers: deploy the mod into the LeviLauncher game instance,
-# drive Minecraft Bedrock with input (the LeviHeadlessInput mod's control pipe by default, real
+# drive Minecraft Bedrock with input (the BeDD mod's control pipe by default, real
 # SendInput with run.ps1 -Foreground) and capture screenshots.
 # Adapted from BEI's tools/e2e/lib.ps1 (same machine, same game instance, same lock).
 #
@@ -13,21 +13,21 @@ $script:ModName      = 'LiftOff'
 $script:Launcher     = if ($env:LO_E2E_LAUNCHER) { $env:LO_E2E_LAUNCHER } else { Join-Path $env:USERPROFILE 'Desktop\LeviLauncher.exe' }
 $script:LauncherData = Join-Path $env:APPDATA 'levilauncher.exe'
 $script:BaseVersion  = if ($env:LO_E2E_CLIENT_VERSION) { $env:LO_E2E_CLIENT_VERSION } else { '1.26.51.01' }
-# Mods that stay loaded during our runs. LeviHeadlessInput (headless input, see run.ps1) is
+# Mods that stay loaded during our runs. BeDD (headless input, see run.ps1) is
 # installed fresh by every headless run and removed after it: never park it aside (a restored copy
 # would make a normally started game ignore the real mouse and keyboard).
-$script:KeepMods     = @('LeviLamina', 'CrashLogger', $script:ModName, 'LeviHeadlessInput')
+$script:KeepMods     = @('LeviLamina', 'CrashLogger', $script:ModName, 'BeDD')
 $script:OutRoot      = Join-Path $PSScriptRoot 'out'
-# LeviHeadlessInput (https://github.com/LiteLDev/LeviHeadlessInput, cloned and built in
-# %USERPROFILE%\Desktop\LeviHeadlessInput by default): a test-only client
+# BeDD (https://github.com/LiteLDev/BeDD, cloned and built in
+# %USERPROFILE%\Desktop\BeDD by default): a test-only client
 # mod that lets run.ps1 drive the game through a control pipe instead of the real mouse and
-# keyboard. Its build output (DLL, HeadlessInput.psm1, harness-shim.ps1, ...) is taken from here.
-$script:HeadlessInputDir = if ($env:LEVI_HEADLESS_INPUT_DIR) { $env:LEVI_HEADLESS_INPUT_DIR } else {
-    Join-Path $env:USERPROFILE 'Desktop\LeviHeadlessInput\bin\LeviHeadlessInput' }
+# keyboard. Its build output (DLL, BeDD.psm1, harness-shim.ps1, ...) is taken from here.
+$script:BeDDDir = if ($env:BEDD_DIR) { $env:BEDD_DIR } else {
+    Join-Path $env:USERPROFILE 'Desktop\BeDD\bin\BeDD' }
 
 # Game instances ("slots"). Slot 1 is the LeviLauncher instance itself; its lock is shared with
 # BEI's and BeetrootSkin's harnesses on purpose (they drive the same instance). Slots 2..N are
-# clones made by LeviHeadlessInput's clone-instance.ps1 (versions\<base>-hi<N>: hard links + their
+# clones made by BeDD's clone-instance.ps1 (versions\<base>-hi<N>: hard links + their
 # own mods\, logs\ and game data) with a lock each, so headless runs can use several games at once.
 # Foreground (real input) runs always use slot 1. Set-E2EInstance points every instance-specific
 # path at a slot; run.ps1 picks the slot (Enter-E2ELock -Slots).
@@ -39,8 +39,8 @@ function Set-E2EInstance([int]$Slot) {
     # Other mods are moved here for the duration of a run (outside mods\, so LeviLamina ignores them).
     $script:AsideDir     = Join-Path $script:VersionDir 'mods.lo-e2e-aside'
     $script:LockFile     = if ($Slot -le 1) { Join-Path $script:LauncherData 'bei-e2e.lock' } else { Join-Path $script:LauncherData "hi$Slot-e2e.lock" }
-    # LeviHeadlessInput control pipe of this instance's game.
-    $script:HeadlessPipe = "LeviHeadlessInput-$script:VersionName"
+    # BeDD control pipe of this instance's game.
+    $script:BeDDPipe = "BeDD-$script:VersionName"
     # Child pwsh processes that source this file (helpers, scenario scripts) start on the same slot.
     $env:LO_E2E_INSTANCE_SLOT = "$Slot"
 }
@@ -99,7 +99,7 @@ public static class Native {
 
     static void Send(INPUT i) { SendInput(1, new[] { i }, Marshal.SizeOf(typeof(INPUT))); }
 
-    // Set by LeviHeadlessInput's harness-shim.ps1 (Register-HeadlessNative): the input methods
+    // Set by BeDD's harness-shim.ps1 (Register-BeDDNative): the input methods
     // below then go to the game through the mod's control pipe instead of SendInput.
     public static Action<ushort, bool> KeyRedirect;
     public static Action<int, bool> MouseButtonRedirect;
@@ -226,10 +226,10 @@ function Remove-DeployedMod {
     if (Test-Path $dest) { Remove-Item -Recurse -Force $dest -ErrorAction SilentlyContinue; Write-Step "removed $dest" }
 }
 
-# Remove mods\LeviHeadlessInput (a leftover of a killed run, or this run's copy once the game is
+# Remove mods\BeDD (a leftover of a killed run, or this run's copy once the game is
 # closed), retrying while the game still holds the DLL open.
-function Remove-HeadlessInputLeftover {
-    $dest = Join-Path $script:ModsDir 'LeviHeadlessInput'
+function Remove-BeDDLeftover {
+    $dest = Join-Path $script:ModsDir 'BeDD'
     for ($i = 0; $i -lt 10 -and (Test-Path $dest); $i++) {
         try { Remove-Item -Recurse -Force $dest -ErrorAction Stop } catch { Start-Sleep -Seconds 2 }
     }
@@ -314,7 +314,7 @@ function Start-Game([int]$TimeoutSeconds = 180) {
         # Straight from the instance folder (the exe loads PreLoader/LeviLamina itself), with a
         # window that is shown without being activated; no launcher window either.
         Write-Step "launching $script:VersionName in the background"
-        & (Join-Path $script:HeadlessInputDir 'Start-HeadlessGame.ps1') -Instance $script:VersionName | Out-Null
+        & (Join-Path $script:BeDDDir 'Start-BeDDGame.ps1') -Instance $script:VersionName | Out-Null
     } else {
         if (-not (Test-Path $script:Launcher)) { throw "LeviLauncher not found at $script:Launcher (set `$env:LO_E2E_LAUNCHER)" }
         # A leftover launcher instance swallows --launch (single-instance hand-off) without

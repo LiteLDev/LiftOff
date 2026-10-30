@@ -49,7 +49,7 @@ One code base builds both the dedicated-server mod and the client mod (`--target
 
 - Unit tests (`src/core`): `xmake build -y lo-tests; xmake run lo-tests`.
 - In-game selftests: `/carryon selftest ["glob"]` (operator or server console).
-- End-to-end: [tools/e2e](tools/e2e/README.md) runs the real server and client, headless through [LeviHeadlessInput](https://github.com/LiteLDev/LeviHeadlessInput). A `showcase` client scenario re-shoots the screenshots and videos in `docs/showcase/` (listed in `showcase.json` for the LeviMC Mods gallery); encode its PNGs and frames with ffmpeg (webp for images, mp4 + animated webp for clips).
+- End-to-end: [tools/e2e](tools/e2e/README.md) runs the real server and client, headless through [Be.D.D.](https://github.com/LiteLDev/BeDD). A `showcase` client scenario re-shoots the screenshots and videos in `docs/showcase/` (listed in `showcase.json` for the LeviMC Mods gallery); encode its PNGs and frames with ffmpeg (webp for images, mp4 + animated webp for clips).
 
 ### How it works
 

@@ -11,8 +11,8 @@
      allowed slot is busy; gives up after -LockTimeoutMinutes with exit code 2. Remote modes
      start the BDS host only after that, so a queued run holds no server slot.
 
-  Input is headless by default: the LeviHeadlessInput mod (https://github.com/LiteLDev/LeviHeadlessInput,
-  %USERPROFILE%\Desktop\LeviHeadlessInput; $env:LEVI_HEADLESS_INPUT_DIR overrides its bin folder) is
+  Input is headless by default: the BeDD mod (https://github.com/LiteLDev/BeDD,
+  %USERPROFILE%\Desktop\BeDD; $env:BEDD_DIR overrides its bin folder) is
   deployed with ours and every click, key, text and screenshot goes through its control pipe. The
   game stays in the background and never takes the real mouse, keyboard or foreground, so the PC
   stays usable during a run. -Foreground uses real SendInput as before (slot 1 only).
@@ -52,7 +52,7 @@ param(
     [int]$LockTimeoutMinutes = 120,  # give up (exit 2, "NOT RUN") if the game lock is not free by then; 0 = wait forever
     [int]$SlotWaitMinutes = 3,       # remote modes: no server slot by then -> release the game lock and queue again
     [int]$HostTimeoutMinutes = 15,   # remote modes: max wait for the BDS host (slot + boot), game lock held
-    [switch]$HeadlessTrace,          # LeviHeadlessInput trace mode: log every key/mouse event reaching the game's input layer
+    [switch]$HeadlessTrace,          # BeDD trace mode: log every key/mouse event reaching the game's input layer
     [switch]$Foreground,             # real SendInput, game in the foreground (takes over the PC); slot 1 only
     # Game instances this run may use (headless only); the first free one is taken. Default:
     # $env:LEVI_E2E_SLOTS ("1,2,3") or 1. Slots 2.. are clones (versions\<base>-hi<N>) made on first
@@ -63,15 +63,15 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/lib.ps1"
 
 if (-not $Foreground) {
-    $shim = Join-Path $script:HeadlessInputDir 'harness-shim.ps1'
+    $shim = Join-Path $script:BeDDDir 'harness-shim.ps1'
     if (-not (Test-Path $shim)) {
-        throw "LeviHeadlessInput is not built ($shim missing). Build it (xmake in its project folder), set `$env:LEVI_HEADLESS_INPUT_DIR, or pass -Foreground to use the real mouse and keyboard."
+        throw "BeDD is not built ($shim missing). Build it (xmake in its project folder), set `$env:BEDD_DIR, or pass -Foreground to use the real mouse and keyboard."
     }
     # Replaces Click/Press-Key/Type-Text/Scroll/Move-Mouse/Focus-Game/Assert-GameForeground/
     # Set-GameWindowSize and routes [BsE2E.Native]::Key/MouseButton/... (used by scenarios)
     # through the mod's pipe.
     . $shim
-    Register-HeadlessNative ([BsE2E.Native])
+    Register-BeDDNative ([BsE2E.Native])
 }
 $slots = if ($Foreground) { @(1) } elseif ($Slot) { $Slot } elseif ($env:LEVI_E2E_SLOTS) {
     @($env:LEVI_E2E_SLOTS -split '[,; ]+' | Where-Object { $_ } | ForEach-Object { [int]$_ }) } else { @(1) }
@@ -172,7 +172,7 @@ try {
     $lockAcquired = $true
     try {
         # A clone instance is made on first use (cheap: hard links); it keeps its own mods and data.
-        if ($script:InstanceSlot -gt 1) { & (Join-Path $script:HeadlessInputDir 'clone-instance.ps1') -Slot $script:InstanceSlot -Source $script:BaseVersion }
+        if ($script:InstanceSlot -gt 1) { & (Join-Path $script:BeDDDir 'clone-instance.ps1') -Slot $script:InstanceSlot -Source $script:BaseVersion }
         if (Get-GameProcess) { Write-Step "closing a running game first"; Stop-Game }
         Restore-OtherMods
         if ($Mode -eq 'remote-vanilla') {
@@ -181,8 +181,8 @@ try {
             Deploy-Mod $ModDir
         }
         if (-not $KeepOtherMods) { Move-OtherModsAside }
-        Remove-HeadlessInputLeftover   # of a killed run
-        if ($script:Headless) { Install-HeadlessInputMod -ModsDir $script:ModsDir -PipeName $script:HeadlessPipe -Trace:$HeadlessTrace }
+        Remove-BeDDLeftover   # of a killed run
+        if ($script:Headless) { Install-BeDDMod -ModsDir $script:ModsDir -PipeName $script:BeDDPipe -Trace:$HeadlessTrace }
         if ($remote) { Set-ExternalServer $hostInfo.port } else {
             Restore-TestWorld
             # Single-player test world: games of all slots share one signaling-service ID, and
@@ -230,7 +230,7 @@ try {
             Write-Step "-KeepOpen: the game stays open; close it to finish the run (lock still held)"
             if ($script:Headless) {
                 # Hand the game to the human: real mouse and keyboard work again.
-                try { Set-HeadlessBackground $false | Out-Null; Write-Step "headless input off: the game takes real input again" } catch {}
+                try { Set-BeDDBackground $false | Out-Null; Write-Step "headless input off: the game takes real input again" } catch {}
             }
             while (Get-GameProcess) { Start-Sleep -Seconds 2 }
         }
@@ -238,7 +238,7 @@ try {
         Request-HostStop # the host shuts down while we clean up
         if ($remote) { Restore-ExternalServers } else { Remove-TestWorld }
         Remove-DeployedMod
-        Remove-HeadlessInputLeftover
+        Remove-BeDDLeftover
         Restore-OtherMods
         $restore = Join-Path $PSScriptRoot "scenarios/$Scenario.restore.ps1"
         # Dot-sourced (like the prelaunch script) so it sees this run's slot ($script:VersionName,

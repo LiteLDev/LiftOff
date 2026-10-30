@@ -23,10 +23,10 @@ Invoke-Chat '/tp @s ~ ~ ~ 0 0'
 Invoke-Chat '/camera @s set minecraft:third_person_front'
 Start-Sleep -Seconds 2
 Save-Screenshot "$m-self-front" | Out-Null
-Send-HeadlessKey -Key SHIFT -Action down
+Send-BeDDKey -Key SHIFT -Action down
 Start-Sleep -Seconds 1
 Save-Screenshot "$m-self-sneak" | Out-Null
-Send-HeadlessKey -Key SHIFT -Action up
+Send-BeDDKey -Key SHIFT -Action up
 Start-Sleep -Milliseconds 500
 Invoke-Chat '/camera @s set minecraft:third_person'
 Start-Sleep -Seconds 2

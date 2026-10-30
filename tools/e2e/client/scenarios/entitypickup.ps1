@@ -20,11 +20,11 @@ Start-Sleep -Seconds 2
 Save-Screenshot 'before' | Out-Null
 
 $mark = Get-LogMark
-Send-HeadlessKey -Key SHIFT -Action down
+Send-BeDDKey -Key SHIFT -Action down
 Start-Sleep -Milliseconds 600
-Send-HeadlessRaw -Action click -Button right -HoldMs 120
+Send-BeDDRaw -Action click -Button right -HoldMs 120
 Start-Sleep -Milliseconds 800
-Send-HeadlessKey -Key SHIFT -Action up
+Send-BeDDKey -Key SHIFT -Action up
 $line = Wait-LogLine 'carry: \S+ picked up entity minecraft:pig' 15 -Since $mark
 Write-Host "[e2e] $line"
 Start-Sleep -Seconds 3
